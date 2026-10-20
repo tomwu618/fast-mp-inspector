@@ -88,9 +88,14 @@ async function runTests() {
     assert.ok(firstRun.auth.syncedStorageKeys.includes('permissions'), 'Should capture arbitrary app storage key permissions');
     assert.ok(fs.existsSync(stateFile), 'StorageState file should be saved to disk');
 
-    // Run 2: Subsequent run with same role/stateFile skips UI login and restores full StorageState in 0ms
+    // Run 2: Subsequent run with same role/stateFile + bounceRoute + live wx.request capture + readText
+    const apiJsonPath = path.join(tmpDir, 'shift-change-20-phone.json');
     const secondRun = await runInspectionWithSession(mockMp, {
       route: '/subpages/elder/residence-change?id=91',
+      bounceRoute: '/pages/index/index',
+      captureApi: '/shift-change/20',
+      saveApiJson: apiJsonPath,
+      readText: JSON.stringify({ reliefPerson: '.form-card' }),
       role: 'nurse',
       loadAuth: stateFile,
       username: 'nurse_zhang',
@@ -105,6 +110,11 @@ async function runTests() {
     });
 
     assert.equal(secondRun.auth.fromCache, true, 'Second run should load directly from cached StorageState');
+    assert.equal(secondRun.bouncedVia, '/pages/index/index');
+    assert.equal(secondRun.renderedText.reliefPerson, '周雨彤');
+    assert.equal(secondRun.capturedRequests.length, 1);
+    assert.equal(secondRun.capturedRequests[0].statusCode, 200);
+    assert.ok(fs.existsSync(apiJsonPath), 'Captured wx.request JSON should be saved to disk');
     assert.equal(secondRun.pageData.elderId, 91);
     assert.equal(secondRun.layout.leftGapPx, 12);
     assert.equal(secondRun.layout.rightGapPx, 12);

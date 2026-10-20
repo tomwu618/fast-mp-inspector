@@ -122,17 +122,21 @@ Jump straight into a deep subpackage page with injected auth storage, verify con
 ```bash
 node scripts/inspect-mp.mjs \
   --ws "ws://127.0.0.1:9420" \
-  --route "/subpages/elder/residence-change?id=91" \
-  --role "nurse" \
+  --bounce-route "/pages/index/index" \
+  --route "/staff-packages/leave-management/shift-change-detail/index?id=20" \
+  --role "zhou_yutong" \
   --login-route "/pages/login/index" \
-  --username "nurse01" \
-  --password "Password123!" \
+  --username "15233668926" \
+  --password "***" \
+  --capture-api "/api/v1/shift-change/20" \
+  --save-api-json "./shift-change-20-phone.json" \
+  --read-text '{"reliefPerson":".relief-person-value","title":".nav-title"}' \
   --parent ".page-container" \
   --target ".form-card" \
   --occlude ".dropdown-menu" \
   --occluders ".fixed-header, .sticky-col, .fixed-footer" \
   --data-path "formData" \
-  --screenshot "./mp-verify.png"
+  --screenshot "./shift_change_detail_20_phone.png"
 ```
 
 ### 🔐 Standardized Multi-Role Auth (`StorageState` Pattern — Zero Hardcoded Keys)

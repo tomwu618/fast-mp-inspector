@@ -33,6 +33,10 @@ export function parseArgs(argv) {
     projectPath: '',
     cliPath: '',
     route: '',
+    bounceRoute: '',
+    captureApi: '',
+    saveApiJson: '',
+    readText: '',
     role: '',
     dumpAuth: '',
     loadAuth: '',
@@ -143,8 +147,83 @@ export async function runInspectionWithSession(miniProgram, args) {
     });
   }
 
-  // 1 & 2. Standardized Multi-Role Auth (UI-Password / StorageState Snapshot / HTTP-Password) + Direct Navigation
-  const { authSummary: authReport, page } = await ensureStandardMpAuthAndNavigate(miniProgram, args);
+  // 1 & 2. Standardized Multi-Role Auth (UI-Password / StorageState Snapshot / HTTP-Password)
+  // Optional: If --bounce-route is set (e.g. "/pages/index/index"), leave current detail page to bounceRoute first,
+  // install in-AppService wx.request live network tap, then enter the target --route so the page fires a fresh request!
+  const targetRoute = args.route;
+  if (args.bounceRoute && targetRoute) {
+    args.route = args.bounceRoute;
+  }
+
+  const { authSummary: authReport, page: initialPage } = await ensureStandardMpAuthAndNavigate(miniProgram, args);
+  args.route = targetRoute;
+
+  // Install in-AppService wx.request live network recorder BEFORE entering target route (or before page reload)
+  if (args.captureApi || args.saveApiJson) {
+    await miniProgram.evaluate((urlPattern) => {
+      const globalObj = typeof getApp === 'function' ? getApp({ allowDefault: true }) || {} : {};
+      globalObj.__FAST_MP_CAPTURED_REQUESTS__ = [];
+      if (typeof wx !== 'undefined' && typeof wx.request === 'function') {
+        const rawRequest = wx.__fastMpRawRequest || wx.request.bind(wx);
+        wx.__fastMpRawRequest = rawRequest;
+        const wrappedRequest = function (options = {}) {
+          const reqUrl = String(options.url || '');
+          const origSuccess = options.success;
+          const origFail = options.fail;
+          const startedAt = Date.now();
+
+          options.success = function (res) {
+            if (!urlPattern || reqUrl.includes(urlPattern)) {
+              globalObj.__FAST_MP_CAPTURED_REQUESTS__.push({
+                url: reqUrl,
+                method: options.method || 'GET',
+                statusCode: res.statusCode,
+                data: res.data,
+                headers: res.header || {},
+                durationMs: Date.now() - startedAt,
+                timestamp: new Date().toISOString(),
+              });
+            }
+            if (typeof origSuccess === 'function') origSuccess.call(this, res);
+          };
+
+          options.fail = function (err) {
+            if (!urlPattern || reqUrl.includes(urlPattern)) {
+              globalObj.__FAST_MP_CAPTURED_REQUESTS__.push({
+                url: reqUrl,
+                method: options.method || 'GET',
+                statusCode: 0,
+                error: err?.errMsg || String(err),
+                durationMs: Date.now() - startedAt,
+                timestamp: new Date().toISOString(),
+              });
+            }
+            if (typeof origFail === 'function') origFail.call(this, err);
+          };
+
+          return rawRequest(options);
+        };
+
+        try {
+          Object.defineProperty(wx, 'request', {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value: wrappedRequest,
+          });
+        } catch {
+          wx.request = wrappedRequest;
+        }
+      }
+    }, args.captureApi || '');
+  }
+
+  let page = initialPage;
+  if (targetRoute && (args.bounceRoute || args.captureApi || args.saveApiJson)) {
+    const normalizedRoute = targetRoute.startsWith('/') ? targetRoute : `/${targetRoute}`;
+    page = await miniProgram.reLaunch(normalizedRoute);
+    await page.waitFor(Number(args.waitMs) || 600);
+  }
 
   if (!page) {
     throw new Error('Unable to acquire active Mini Program page instance.');
@@ -165,6 +244,37 @@ export async function runInspectionWithSession(miniProgram, args) {
 
   // 4. Read MVVM Page.data directly from AppService
   const pageDataSnapshot = await page.data(args.dataPath || undefined);
+
+  // 4b. Read rendered WXML text from selectors if --read-text is specified (comma-separated or JSON map)
+  let renderedTextReport = null;
+  if (args.readText) {
+    renderedTextReport = {};
+    const selectors = args.readText.trim().startsWith('{')
+      ? Object.entries(JSON.parse(args.readText))
+      : args.readText.split(',').map((s) => [s.trim(), s.trim()]);
+
+    for (const [label, sel] of selectors) {
+      const el = await page.$(sel);
+      renderedTextReport[label] = el && typeof el.text === 'function' ? await el.text() : null;
+    }
+  }
+
+  // 4c. Collect live in-page wx.request network responses & save raw JSON if --save-api-json is specified
+  let capturedNetworkReport = null;
+  if (args.captureApi || args.saveApiJson) {
+    const capturedList = await miniProgram.evaluate(() => {
+      const globalObj = typeof getApp === 'function' ? getApp({ allowDefault: true }) || {} : {};
+      return globalObj.__FAST_MP_CAPTURED_REQUESTS__ || [];
+    });
+    capturedNetworkReport = capturedList;
+
+    if (args.saveApiJson && Array.isArray(capturedList) && capturedList.length > 0) {
+      const absJsonPath = path.resolve(args.saveApiJson);
+      fs.mkdirSync(path.dirname(absJsonPath), { recursive: true });
+      const latestMatch = capturedList[capturedList.length - 1];
+      fs.writeFileSync(absJsonPath, JSON.stringify(latestMatch, null, 2));
+    }
+  }
 
   // 5. Query System Info + SelectorQuery Geometry & WXSS Computed Styles in a single AppService round-trip
   const rawQueryReport = await miniProgram.evaluate(
@@ -369,10 +479,13 @@ export async function runInspectionWithSession(miniProgram, args) {
   return {
     elapsedMs: Date.now() - t0,
     route: page.path || args.route || '/pages/index/index',
+    bouncedVia: args.bounceRoute || null,
     auth: authReport,
     systemInfo: rawQueryReport.systemInfo,
     dataPath: args.dataPath || '(root)',
     pageData: pageDataSnapshot,
+    renderedText: renderedTextReport,
+    capturedRequests: capturedNetworkReport,
     layout: layoutReport,
     occlusion: occlusionReport,
     screenshot: screenshotInfo,
@@ -485,6 +598,9 @@ export function createMockMiniProgramSession() {
       if (!m) return null;
       return {
         async tap() {},
+        async text() {
+          return m.text ?? '周雨彤';
+        },
         async size() {
           return { width: m.width, height: m.height };
         },
@@ -530,6 +646,28 @@ export function createMockMiniProgramSession() {
           occludeTargetNode: arg.occludeSel ? mockElements[arg.occludeSel] || null : null,
           occluderNodes: arg.occludeSel ? mockOccluders : [],
         };
+      }
+      // Simulate live wx.request network capture in mock mode
+      if (typeof arg === 'string') {
+        return true;
+      }
+      if (!arg && fn.toString().includes('__FAST_MP_CAPTURED_REQUESTS__')) {
+        return [
+          {
+            url: 'https://spark-api-dev.brtel.link:8008/api/v1/shift-change/20',
+            method: 'GET',
+            statusCode: 200,
+            data: {
+              id: 20,
+              applicantName: '周雨彤',
+              reliefPersonId: '22',
+              reliefPersonName: '周雨彤',
+              reason: '核对1019调班详情',
+              status: 'APPROVED',
+            },
+            durationMs: 42,
+          },
+        ];
       }
       // Storage + globalData injection or dump simulation
       if (!arg) {

@@ -142,11 +142,9 @@ const layoutMetrics = await miniProgram.evaluate(({ parentSel, targetSel }) => {
 ### 4.3 Deterministic AABB + Z-Index Occlusion Detection
 Because `document.elementFromPoint(x, y)` is unavailable in AppService, detect whether a target element (e.g., a bottom action button or dropdown) is covered by fixed/sticky overlays (`.fixed-footer`, `.custom-nav`, `.modal-mask`) using **Axis-Aligned Bounding Box (AABB) intersection + Computed `z-index` comparison** inside `inspect-mp.mjs`.
 
-### 4.4 Simulator Screenshot Capture (`miniProgram.screenshot`)
-Always support saving a visual proof PNG alongside the JSON geometry report when `--screenshot` is passed:
-```js
-await miniProgram.screenshot({ path: './mp-verify.png' });
-```
+### 4.4 Live In-Page `wx.request` Capture & Simulator Screenshot Guardrails
+- **NEVER use external `curl` or hand-write fake JSON files** when verifying what an active Mini Program page requested. Use `--bounce-route "/pages/index/index" --capture-api "/shift-change/20" --save-api-json ./response.json` so `inspect-mp.mjs` leaves the page, hooks `wx.request` inside AppService, re-enters the target route, and saves the exact HTTP `statusCode` and `res.data` received by that page.
+- **NEVER use OS window `screencapture` + image cropping (`sips`/`magick`) on the WeChat DevTools Debugger (`Console`/`Network`/`Wxml` panels)** to pretend you captured the phone simulator. Always use `miniProgram.screenshot({ path })` (`--screenshot`) with the DevTools **Simulator (模拟器)** pane visible, and use `--read-text '{"reliefPerson":".relief-person"}'` to extract rendered WXML text deterministically.
 
 ---
 
