@@ -59,14 +59,19 @@ async function runTests() {
     assert.equal(failReport.emptyFiles.length, 1);
     console.log('  [PASS] Truncated subpackage file accurately detected.');
 
-    console.log('=== [2/3] Testing Layer 3 & 4: CLI Inspection Pipeline + Screenshot ===');
+    console.log('=== [2/3] Testing Layer 3 & 4: Standardized UI-Password Login -> StorageState Snapshot -> Fast Replay ===');
     const mockMp = createMockMiniProgramSession();
     const shotPath = path.join(tmpDir, 'verify-shot.png');
+    const stateFile = path.join(tmpDir, 'nurse.state.json');
 
-    const report = await runInspectionWithSession(mockMp, {
+    // Run 1: UI Username/Password login on /pages/login/index -> auto-dumps ALL custom storage keys (uni_id_token, permissions, etc.)
+    const firstRun = await runInspectionWithSession(mockMp, {
       route: '/subpages/elder/residence-change?id=91',
-      storage: JSON.stringify({ token: 'mock-jwt-token', role: 'NURSE' }),
-      globalData: JSON.stringify({ role: 'NURSE', permissions: ['elder:edit'] }),
+      role: 'nurse',
+      loadAuth: stateFile,
+      loginRoute: '/pages/login/index',
+      username: 'nurse_zhang',
+      password: 'Password123!',
       parent: '.page-container',
       target: '.form-card',
       occlude: '.dropdown-menu',
@@ -76,17 +81,38 @@ async function runTests() {
       screenshot: shotPath,
     });
 
-    assert.equal(report.route, '/subpages/elder/residence-change');
-    assert.deepEqual(report.auth.syncedStorageKeys, ['token', 'role']);
-    assert.deepEqual(report.auth.syncedGlobalDataKeys, ['role', 'permissions']);
-    assert.equal(report.pageData.elderId, 91);
-    assert.equal(report.layout.leftGapPx, 12);
-    assert.equal(report.layout.rightGapPx, 12);
-    assert.equal(report.layout.leftGapRpx, 24);
-    assert.equal(report.occlusion.isOccluded, true, 'Dropdown z-index 10 should be occluded by fixed header z-index 50');
-    assert.equal(report.screenshot.exists, true, 'Screenshot PNG file should be written to disk');
-    assert.ok(report.screenshot.bytes > 0, 'Screenshot PNG should be non-empty');
-    console.log('  [PASS] CLI inspection report (MVVM data + rpx/px geometry + AABB occlusion + PNG screenshot) verified.');
+    assert.equal(firstRun.route, '/subpages/elder/residence-change');
+    assert.equal(firstRun.auth.authMethod, 'ui-password');
+    assert.equal(firstRun.auth.fromCache, false);
+    assert.ok(firstRun.auth.syncedStorageKeys.includes('uni_id_token'), 'Should capture arbitrary app storage key uni_id_token');
+    assert.ok(firstRun.auth.syncedStorageKeys.includes('permissions'), 'Should capture arbitrary app storage key permissions');
+    assert.ok(fs.existsSync(stateFile), 'StorageState file should be saved to disk');
+
+    // Run 2: Subsequent run with same role/stateFile skips UI login and restores full StorageState in 0ms
+    const secondRun = await runInspectionWithSession(mockMp, {
+      route: '/subpages/elder/residence-change?id=91',
+      role: 'nurse',
+      loadAuth: stateFile,
+      username: 'nurse_zhang',
+      password: 'Password123!',
+      parent: '.page-container',
+      target: '.form-card',
+      occlude: '.dropdown-menu',
+      occluders: '.sticky-col',
+      dataPath: 'formData',
+      waitMs: '10',
+      screenshot: shotPath,
+    });
+
+    assert.equal(secondRun.auth.fromCache, true, 'Second run should load directly from cached StorageState');
+    assert.equal(secondRun.pageData.elderId, 91);
+    assert.equal(secondRun.layout.leftGapPx, 12);
+    assert.equal(secondRun.layout.rightGapPx, 12);
+    assert.equal(secondRun.layout.leftGapRpx, 24);
+    assert.equal(secondRun.occlusion.isOccluded, true, 'Dropdown z-index 10 should be occluded by fixed header z-index 50');
+    assert.equal(secondRun.screenshot.exists, true, 'Screenshot PNG file should be written to disk');
+    assert.ok(secondRun.screenshot.bytes > 0, 'Screenshot PNG should be non-empty');
+    console.log('  [PASS] Standardized UI-Password login + full StorageState replay + geometry/occlusion/screenshot verified.');
 
     console.log('=== [3/3] Testing Reusable Assertion Recipes ===');
     const page = await mockMp.currentPage();

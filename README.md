@@ -124,8 +124,9 @@ node scripts/inspect-mp.mjs \
   --ws "ws://127.0.0.1:9420" \
   --route "/subpages/elder/residence-change?id=91" \
   --role "nurse" \
-  --login-url "http://localhost:9020/api/auth/login" \
-  --login-body '{"username":"nurse01","password":"***"}' \
+  --login-route "/pages/login/index" \
+  --username "nurse01" \
+  --password "Password123!" \
   --parent ".page-container" \
   --target ".form-card" \
   --occlude ".dropdown-menu" \
@@ -134,12 +135,19 @@ node scripts/inspect-mp.mjs \
   --screenshot "./mp-verify.png"
 ```
 
-> **🔐 Role-Aware Zero-UI Auth (`scripts/auth-helper.mjs`)**:
-> Simply writing a fake string to `wx.setStorageSync('token')` fails when backend APIs enforce role tokens (`@PreAuthorize`) or when `App.onLaunch` has already cached user roles in `getApp().globalData`.
-> `fast-mp-inspector` solves this with 3 mechanisms:
-> 1. **Real Role Token Fetching & Disk Caching (`--role` + `--login-url`)**: Logs in against your backend API once per role (`director`, `nurse`, `family`), validates JWT `exp`, and caches the session in `.auth-cache/<role>.json` (`0ms` reuse on subsequent runs).
-> 2. **In-Simulator `wx.login()` Code Exchange (`--wx-login-exchange-url`)**: Calls `wx.login()` inside AppService to exchange a real WeChat `code` for a role token when required.
-> 3. **Dual-Layer State Sync (`--storage` + `--global-data`)**: Simultaneously populates `wx.setStorageSync` AND `getApp().globalData` before `miniProgram.reLaunch()` so role-gated views (`wx:if="{{role === 'NURSE'}}"` / `v-if`) and API interceptors work identically to a full UI login.
+### 🔐 Standardized Multi-Role Auth (`StorageState` Pattern — Zero Hardcoded Keys)
+Real-world Mini Programs authenticate in diverse ways: some use **username/password login** with frontend RSA/MD5/SM2 encryption, some write 10+ custom keys (`uni_id_token`, `access_token`, `roleList`, `pinia_user`), and some rely on `getApp().globalData`.
+
+`fast-mp-inspector` implements a **Playwright-style `StorageState` standard** (`scripts/auth-helper.mjs`) with **3 standardized strategies**:
+
+1. **Strategy 1: `ui-password` (Standard Username/Password UI Login $\rightarrow$ Full `wx.getStorageInfoSync` Snapshot)**
+   - On the first run for `--role nurse`, jumps to `--login-route`, inputs `--username` and `--password` via native WXML `<input>` selectors (`--user-selector`, `--pass-selector`, `--submit-selector`), and taps login.
+   - Once the Mini Program finishes its own encryption and login hooks, `fast-mp-inspector` calls `wx.getStorageInfoSync().keys` to **automatically enumerate and snapshot EVERY storage key + `getApp().globalData`** into `.auth-cache/nurse.state.json`.
+   - On subsequent runs, restores the entire `.state.json` into both `Storage` and `globalData` in **0ms** and jumps straight to `--route`. If redirected back to `--login-route` (token expired), it **automatically re-runs the password login and refreshes the snapshot**!
+2. **Strategy 2: `--dump-auth` / `--load-auth` (Live DevTools Session Recording & Replay)**
+   - Log in manually once in WeChat DevTools (even with SMS/captcha/WeChat OAuth), then run `node scripts/inspect-mp.mjs --ws ws://127.0.0.1:9420 --dump-auth .auth-cache/admin.state.json`. Replay anytime via `--load-auth`.
+3. **Strategy 3: `http-password` (`--login-url` REST API Token Exchange)**
+   - Configurable `--username-field`, `--password-field`, `--token-field`, and `--token-storage-key`.
 
 **Output JSON:**
 ```json

@@ -25,7 +25,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { injectMpRoleSession, resolveRoleAuth } from './auth-helper.mjs';
+import { ensureStandardMpAuthAndNavigate } from './auth-helper.mjs';
 
 export function parseArgs(argv) {
   const args = {
@@ -34,9 +34,21 @@ export function parseArgs(argv) {
     cliPath: '',
     route: '',
     role: '',
+    dumpAuth: '',
+    loadAuth: '',
+    loginRoute: '/pages/login/index',
+    username: '',
+    password: '',
+    userSelector: '.username-input, input[type="text"], input[name="username"]',
+    passSelector: '.password-input, input[password], input[type="password"], input[name="password"]',
+    submitSelector: '.login-btn, button[form-type="submit"], button[type="primary"]',
+    loginMethod: '',
     loginUrl: '',
     loginBody: '',
-    wxLoginExchangeUrl: '',
+    usernameField: 'username',
+    passwordField: 'password',
+    tokenField: 'data.token',
+    tokenStorageKey: 'token',
     storage: '',
     globalData: '',
     tapBefore: '',
@@ -131,46 +143,12 @@ export async function runInspectionWithSession(miniProgram, args) {
     });
   }
 
-  // 1. Resolve Role Token (via API cache or CLI flags) & Inject into both Storage and getApp().globalData
-  let authReport = null;
-  let storageMap = args.storage ? JSON.parse(args.storage) : {};
-  let globalDataMap = args.globalData ? JSON.parse(args.globalData) : {};
-
-  if (args.role && args.loginUrl) {
-    const resolved = await resolveRoleAuth({
-      role: args.role,
-      loginUrl: args.loginUrl,
-      loginBody: args.loginBody || {},
-    });
-    storageMap = { ...resolved.storageMap, ...storageMap };
-    globalDataMap = { ...resolved.globalDataMap, ...globalDataMap };
-    authReport = { role: resolved.role, fromCache: resolved.fromCache };
-  }
-
-  if (Object.keys(storageMap).length > 0 || Object.keys(globalDataMap).length > 0 || args.wxLoginExchangeUrl) {
-    const syncRes = await injectMpRoleSession(miniProgram, {
-      storageMap,
-      globalDataMap,
-      wxLoginExchangeUrl: args.wxLoginExchangeUrl,
-      role: args.role || 'default',
-    });
-    authReport = { ...(authReport || {}), ...syncRes };
-  }
-
-  // 2. Navigate directly via reLaunch or grab current page
-  let page;
-  if (args.route) {
-    const normalizedRoute = args.route.startsWith('/') ? args.route : `/${args.route}`;
-    page = await miniProgram.reLaunch(normalizedRoute);
-  } else {
-    page = await miniProgram.currentPage();
-  }
+  // 1 & 2. Standardized Multi-Role Auth (UI-Password / StorageState Snapshot / HTTP-Password) + Direct Navigation
+  const { authSummary: authReport, page } = await ensureStandardMpAuthAndNavigate(miniProgram, args);
 
   if (!page) {
     throw new Error('Unable to acquire active Mini Program page instance.');
   }
-
-  await page.waitFor(Number(args.waitMs) || 500);
 
   // 3. Optional pre-inspection interaction (tap or callMethod)
   if (args.tapBefore) {
@@ -488,6 +466,21 @@ export function createMockMiniProgramSession() {
     },
     async waitFor() {},
     async $(sel) {
+      // Support login form selectors in mock mode
+      if (sel.includes('username') || sel.includes('password') || sel.includes('login-btn')) {
+        return {
+          async input(val) {
+            storage.set(sel.includes('username') ? 'lastInputUsername' : 'lastInputPassword', val);
+          },
+          async tap() {
+            // Simulate Mini Program login writing multiple custom storage keys (e.g. uni_id_token, roleList)
+            storage.set('uni_id_token', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.mock');
+            storage.set('userInfo', { username: storage.get('lastInputUsername'), role: 'NURSE' });
+            storage.set('permissions', ['elder:view', 'elder:edit']);
+            currentRoute = '/pages/index/index';
+          },
+        };
+      }
       const m = mockElements[sel];
       if (!m) return null;
       return {
@@ -538,7 +531,14 @@ export function createMockMiniProgramSession() {
           occluderNodes: arg.occludeSel ? mockOccluders : [],
         };
       }
-      // Storage + globalData injection simulation
+      // Storage + globalData injection or dump simulation
+      if (!arg) {
+        const storageMap = Object.fromEntries(storage.entries());
+        return {
+          storageMap,
+          globalDataMap: { isLogin: true, role: storageMap.userInfo?.role || 'NURSE' },
+        };
+      }
       if (arg && typeof arg === 'object' && ('sMap' in arg || 'gMap' in arg)) {
         const sKeys = Object.keys(arg.sMap || {});
         const gKeys = Object.keys(arg.gMap || {});

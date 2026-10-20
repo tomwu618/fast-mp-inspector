@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 /**
- * Role-Aware Auth & Token Cache Manager (scripts/auth-helper.mjs)
+ * Standardized Multi-Role Auth & StorageState Manager (scripts/auth-helper.mjs)
  *
- * Solves the "Role Token Dependency" problem in Zero-UI E2E testing:
- * 1. Fetches real JWT tokens & role profiles from your backend login API per role (e.g., admin, nurse, family)
- * 2. Caches valid tokens on disk (.auth-cache/<role>.json) and checks JWT `exp` so subsequent runs take 0ms
- * 3. Injects auth state into BOTH `wx.setStorageSync` AND `getApp().globalData` (plus uni-app/Taro stores)
+ * Inspired by Playwright's `storageState` standard, adapted for WeChat Mini Programs.
+ * Zero hardcoded storage keys — works with ANY Native / uni-app / Taro Mini Program!
+ *
+ * Supports 3 standardized authentication strategies:
+ * 1. `ui-password`: Automates username/password form input on the Mini Program's login page once,
+ *    lets the app execute its own RSA/MD5 encryption & login hooks, then dumps ALL `wx.getStorageInfoSync()`
+ *    keys + `getApp().globalData` into `.auth-cache/<role>.state.json` for 0ms reuse.
+ *    Automatically re-runs `ui-password` login if the cached token expires (redirected back to login page).
+ * 2. `snapshot` (`--dump-auth` / `--load-auth`): Captures or restores the entire live Storage + globalData state
+ *    from WeChat DevTools (ideal for SMS/captcha/OAuth logins).
+ * 3. `http-password`: Direct HTTP login against a REST API with configurable field mapping.
  */
 
 import fs from 'node:fs';
@@ -14,73 +21,175 @@ import path from 'node:path';
 const DEFAULT_CACHE_DIR = path.resolve(process.cwd(), '.auth-cache');
 
 /**
- * Check if a JWT token string is still valid (with 60s safety buffer)
+ * Dump the complete live `wx` Storage and serializable `getApp().globalData` from AppService
  */
-export function isJwtValid(token) {
-  if (!token || typeof token !== 'string') return false;
-  const parts = token.split('.');
-  if (parts.length !== 3) return true; // Non-JWT opaque token; rely on cache TTL
-  try {
-    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
-    if (!payload.exp) return true;
-    const nowSec = Math.floor(Date.now() / 1000);
-    return payload.exp > nowSec + 60;
-  } catch {
-    return true;
-  }
+export async function captureMpStorageState(miniProgram, role = 'default') {
+  const snapshot = await miniProgram.evaluate(() => {
+    const storageMap = {};
+    if (typeof wx !== 'undefined' && typeof wx.getStorageInfoSync === 'function') {
+      const info = wx.getStorageInfoSync() || {};
+      const keys = Array.isArray(info.keys) ? info.keys : [];
+      for (const k of keys) {
+        try {
+          storageMap[k] = wx.getStorageSync(k);
+        } catch {
+          // Ignore unreadable key
+        }
+      }
+    }
+
+    let globalDataMap = {};
+    if (typeof getApp === 'function') {
+      try {
+        const app = getApp({ allowDefault: true });
+        if (app && app.globalData) {
+          globalDataMap = JSON.parse(JSON.stringify(app.globalData));
+        }
+      } catch {
+        // Ignore non-serializable globalData properties
+      }
+    }
+
+    return {
+      storageMap,
+      globalDataMap,
+    };
+  });
+
+  return {
+    version: 1,
+    role,
+    capturedAt: new Date().toISOString(),
+    timestamp: Date.now(),
+    storageMap: snapshot?.storageMap || {},
+    globalDataMap: snapshot?.globalDataMap || {},
+  };
 }
 
 /**
- * Resolve role credentials via cache or live HTTP login endpoint
- *
- * @param {Object} options
- * @param {string} options.role - Role name (e.g., "director", "nurse", "regulator")
- * @param {string} [options.loginUrl] - Backend login endpoint URL
- * @param {Object|string} [options.loginBody] - JSON payload for login request
- * @param {string} [options.tokenField="token"] - Dot-path in response JSON to extract token (e.g., "data.token")
- * @param {string} [options.userField="data.userInfo"] - Dot-path in response JSON to extract user/role profile
- * @param {string} [options.cacheDir] - Directory for caching role tokens
- * @param {number} [options.ttlSeconds=3600] - Fallback cache TTL in seconds
+ * Restore a complete `StorageState` object into both `wx.setStorageSync` and `getApp().globalData`
  */
-export async function resolveRoleAuth({
-  role = 'default',
-  loginUrl = '',
-  loginBody = {},
-  tokenField = 'data.token',
-  userField = 'data.user',
-  cacheDir = DEFAULT_CACHE_DIR,
-  ttlSeconds = 3600,
-}) {
-  fs.mkdirSync(cacheDir, { recursive: true });
-  const cacheFile = path.join(cacheDir, `${role.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`);
-
-  // 1. Check cached role session
-  if (fs.existsSync(cacheFile)) {
-    try {
-      const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-      const ageSec = (Date.now() - (cached.cachedAt || 0)) / 1000;
-      if (ageSec < ttlSeconds && isJwtValid(cached.token)) {
-        return { ...cached, fromCache: true };
+export async function restoreMpStorageState(miniProgram, stateObj, clearExisting = false) {
+  return await miniProgram.evaluate(
+    ({ sMap, gMap, shouldClear }) => {
+      if (typeof wx !== 'undefined') {
+        if (shouldClear && typeof wx.clearStorageSync === 'function') {
+          wx.clearStorageSync();
+        }
+        if (typeof wx.setStorageSync === 'function') {
+          for (const [k, v] of Object.entries(sMap || {})) {
+            wx.setStorageSync(k, v);
+          }
+        }
       }
-    } catch {
-      // Ignore corrupted cache
+
+      if (typeof getApp === 'function') {
+        const app = getApp({ allowDefault: true });
+        if (app) {
+          app.globalData = Object.assign(app.globalData || {}, gMap || {});
+        }
+      }
+
+      return {
+        syncedStorageKeys: Object.keys(sMap || {}),
+        syncedGlobalDataKeys: Object.keys(gMap || {}),
+      };
+    },
+    {
+      sMap: stateObj.storageMap || {},
+      gMap: stateObj.globalDataMap || {},
+      shouldClear: clearExisting,
     }
+  );
+}
+
+/**
+ * Standardized UI Username/Password Form Login inside Mini Program Simulator
+ *
+ * Works with any frontend encryption (MD5/RSA/SM2), custom headers, and multi-key storage writes!
+ */
+export async function performMpUiPasswordLogin(
+  miniProgram,
+  {
+    loginRoute = '/pages/login/index',
+    username = '',
+    password = '',
+    usernameSelector = '.username-input, input[type="text"], input[name="username"]',
+    passwordSelector = '.password-input, input[password], input[type="password"], input[name="password"]',
+    submitSelector = '.login-btn, button[form-type="submit"], button[type="primary"]',
+    callLoginMethod = '',
+    postLoginWaitMs = 1000,
+    role = 'default',
+  }
+) {
+  const normLoginRoute = loginRoute.startsWith('/') ? loginRoute : `/${loginRoute}`;
+  const loginPage = await miniProgram.reLaunch(normLoginRoute);
+  await loginPage.waitFor(400);
+
+  if (callLoginMethod) {
+    // Option A: Directly invoke page login method if specified
+    await loginPage.callMethod(callLoginMethod, { username, password });
+  } else {
+    // Option B: Standardized UI input filling & submit tap
+    const userEl = await loginPage.$(usernameSelector);
+    if (!userEl) {
+      throw new Error(`Username input not found on ${normLoginRoute} using selector "${usernameSelector}"`);
+    }
+    await userEl.input(String(username));
+
+    const passEl = await loginPage.$(passwordSelector);
+    if (!passEl) {
+      throw new Error(`Password input not found on ${normLoginRoute} using selector "${passwordSelector}"`);
+    }
+    await passEl.input(String(password));
+
+    const submitEl = await loginPage.$(submitSelector);
+    if (!submitEl) {
+      throw new Error(`Login submit button not found on ${normLoginRoute} using selector "${submitSelector}"`);
+    }
+    await submitEl.tap();
   }
 
-  if (!loginUrl) {
-    throw new Error(`No valid cached token for role "${role}" and no --login-url provided.`);
-  }
+  await loginPage.waitFor(Number(postLoginWaitMs) || 1000);
 
-  // 2. Authenticate against real backend API
-  const payloadObj = typeof loginBody === 'string' ? JSON.parse(loginBody) : loginBody;
+  // Capture all storage keys & globalData populated by the Mini Program's own login logic
+  const capturedState = await captureMpStorageState(miniProgram, role);
+  return {
+    ...capturedState,
+    authMethod: 'ui-password',
+  };
+}
+
+/**
+ * Standardized HTTP Username/Password Login with configurable field & storage key mapping
+ */
+export async function performHttpPasswordLogin({
+  loginUrl,
+  username,
+  password,
+  usernameField = 'username',
+  passwordField = 'password',
+  extraBody = {},
+  tokenField = 'data.token',
+  userField = 'data.userInfo',
+  tokenStorageKey = 'token',
+  userStorageKey = 'userInfo',
+  role = 'default',
+}) {
+  const reqBody = {
+    ...(typeof extraBody === 'string' ? JSON.parse(extraBody) : extraBody),
+    ...(username ? { [usernameField]: username } : {}),
+    ...(password ? { [passwordField]: password } : {}),
+  };
+
   const response = await fetch(loginUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payloadObj),
+    body: JSON.stringify(reqBody),
   });
 
   if (!response.ok) {
-    throw new Error(`Role "${role}" login failed with HTTP ${response.status} from ${loginUrl}`);
+    throw new Error(`HTTP login failed with status ${response.status} from ${loginUrl}`);
   }
 
   const resJson = await response.json();
@@ -95,99 +204,183 @@ export async function resolveRoleAuth({
     resJson.data?.accessToken;
 
   if (!token) {
-    throw new Error(`Could not extract token from login response using path "${tokenField}"`);
+    throw new Error(`Could not extract token from HTTP login response using path "${tokenField}"`);
   }
 
   const userProfile = extractPath(resJson, userField) ?? resJson.userInfo ?? resJson.data ?? {};
-  const sessionData = {
+
+  return {
+    version: 1,
     role,
-    token,
-    userProfile,
+    authMethod: 'http-password',
+    capturedAt: new Date().toISOString(),
+    timestamp: Date.now(),
     storageMap: {
-      token,
-      userInfo: userProfile,
-      currentRole: role,
+      [tokenStorageKey]: token,
+      [userStorageKey]: userProfile,
     },
     globalDataMap: {
-      token,
-      userInfo: userProfile,
+      [tokenStorageKey]: token,
+      [userStorageKey]: userProfile,
       role,
       isLogin: true,
     },
-    cachedAt: Date.now(),
   };
-
-  fs.writeFileSync(cacheFile, JSON.stringify(sessionData, null, 2));
-  return { ...sessionData, fromCache: false };
 }
 
 /**
- * Inject role session into BOTH WeChat Storage AND AppService `getApp().globalData`
- * (plus optional wx.login() in-simulator code exchange)
+ * Get the state file path for a given role or explicit file path
  */
-export async function injectMpRoleSession(miniProgram, { storageMap = {}, globalDataMap = {}, wxLoginExchangeUrl = '', role = '' }) {
-  return await miniProgram.evaluate(
-    ({ sMap, gMap, exchangeUrl, targetRole }) => {
-      return new Promise((resolve) => {
-        const applyState = (extraStorage = {}, extraGlobal = {}) => {
-          const mergedStorage = Object.assign({}, sMap, extraStorage);
-          const mergedGlobal = Object.assign({}, gMap, extraGlobal);
+export function resolveStateFilePath({ role = 'default', stateFile = '', cacheDir = DEFAULT_CACHE_DIR }) {
+  if (stateFile) return path.resolve(stateFile);
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const safeRole = String(role || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return path.join(cacheDir, `${safeRole}.state.json`);
+}
 
-          // 1. Sync wx.setStorageSync
-          if (typeof wx !== 'undefined' && typeof wx.setStorageSync === 'function') {
-            for (const [k, v] of Object.entries(mergedStorage)) {
-              wx.setStorageSync(k, v);
-            }
-          }
+/**
+ * High-level standardized orchestrator:
+ * 1. Supports `--dump-auth <file>` to snapshot current logged-in state
+ * 2. Loads cached `.auth-cache/<role>.state.json` (or `--load-auth <file>`) if present
+ * 3. Otherwise runs `ui-password` or `http-password` login and saves `.state.json`
+ * 4. Injects state and navigates to target route; if redirected back to login page (token expired),
+ *    automatically re-authenticates via `ui-password` / `http-password` and refreshes cache!
+ */
+export async function ensureStandardMpAuthAndNavigate(miniProgram, args) {
+  const statePath = resolveStateFilePath({
+    role: args.role || 'default',
+    stateFile: args.loadAuth || args.dumpAuth || '',
+  });
 
-          // 2. Sync getApp().globalData (crucial when App.onLaunch has already executed!)
-          if (typeof getApp === 'function') {
-            const app = getApp({ allowDefault: true });
-            if (app) {
-              app.globalData = Object.assign(app.globalData || {}, mergedGlobal);
-            }
-          }
+  // Mode 1: Dump current live DevTools auth state to file
+  if (args.dumpAuth) {
+    const dumped = await captureMpStorageState(miniProgram, args.role || 'default');
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, JSON.stringify(dumped, null, 2));
+    return {
+      authSummary: {
+        mode: 'dump-auth',
+        role: dumped.role,
+        stateFile: statePath,
+        syncedStorageKeys: Object.keys(dumped.storageMap),
+        syncedGlobalDataKeys: Object.keys(dumped.globalDataMap),
+      },
+      page: await miniProgram.currentPage(),
+    };
+  }
 
-          resolve({
-            syncedStorageKeys: Object.keys(mergedStorage),
-            syncedGlobalDataKeys: Object.keys(mergedGlobal),
-          });
-        };
+  let stateObj = null;
+  let fromCache = false;
 
-        // Optional: In-simulator wx.login() -> backend token exchange
-        if (exchangeUrl && typeof wx !== 'undefined' && typeof wx.login === 'function') {
-          wx.login({
-            success(loginRes) {
-              wx.request({
-                url: exchangeUrl,
-                method: 'POST',
-                data: { code: loginRes.code, role: targetRole },
-                success(resp) {
-                  const data = resp.data?.data || resp.data || {};
-                  applyState(
-                    { token: data.token, userInfo: data.userInfo || data },
-                    { token: data.token, userInfo: data.userInfo || data, role: targetRole, isLogin: true }
-                  );
-                },
-                fail() {
-                  applyState();
-                },
-              });
-            },
-            fail() {
-              applyState();
-            },
-          });
-        } else {
-          applyState();
-        }
-      });
-    },
-    {
-      sMap: storageMap,
-      gMap: globalDataMap,
-      exchangeUrl: wxLoginExchangeUrl,
-      targetRole: role,
+  // Try loading existing state snapshot from disk
+  const hasAuthCredentials = Boolean(args.loadAuth || args.username || args.loginUrl || args.storage || args.globalData);
+  if ((args.loadAuth || args.role) && fs.existsSync(statePath)) {
+    try {
+      stateObj = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+      fromCache = true;
+    } catch {
+      stateObj = null;
     }
-  );
+  }
+
+  // Helper to execute fresh login (UI username/password or HTTP username/password)
+  const executeFreshLogin = async () => {
+    if (args.loginUrl) {
+      return await performHttpPasswordLogin({
+        loginUrl: args.loginUrl,
+        username: args.username,
+        password: args.password,
+        usernameField: args.usernameField || 'username',
+        passwordField: args.passwordField || 'password',
+        extraBody: args.loginBody || {},
+        tokenField: args.tokenField || 'data.token',
+        tokenStorageKey: args.tokenStorageKey || 'token',
+        role: args.role || 'default',
+      });
+    }
+    if (args.username && args.password) {
+      return await performMpUiPasswordLogin(miniProgram, {
+        loginRoute: args.loginRoute || '/pages/login/index',
+        username: args.username,
+        password: args.password,
+        usernameSelector: args.userSelector || '.username-input, input[type="text"], input[name="username"]',
+        passwordSelector: args.passSelector || '.password-input, input[password], input[type="password"], input[name="password"]',
+        submitSelector: args.submitSelector || '.login-btn, button[form-type="submit"], button[type="primary"]',
+        callLoginMethod: args.loginMethod || '',
+        role: args.role || 'default',
+      });
+    }
+    return null;
+  };
+
+  if (!stateObj && (args.username || args.loginUrl)) {
+    stateObj = await executeFreshLogin();
+    if (stateObj) {
+      fs.mkdirSync(path.dirname(statePath), { recursive: true });
+      fs.writeFileSync(statePath, JSON.stringify(stateObj, null, 2));
+    }
+  }
+
+  // Merge any explicit --storage or --global-data overrides
+  const extraStorage = args.storage ? JSON.parse(args.storage) : {};
+  const extraGlobal = args.globalData ? JSON.parse(args.globalData) : {};
+  if (stateObj || Object.keys(extraStorage).length > 0 || Object.keys(extraGlobal).length > 0) {
+    stateObj = {
+      ...(stateObj || { role: args.role || 'default', authMethod: 'inline-override' }),
+      storageMap: { ...(stateObj?.storageMap || {}), ...extraStorage },
+      globalDataMap: { ...(stateObj?.globalDataMap || {}), ...extraGlobal },
+    };
+  }
+
+  let syncResult = null;
+  if (stateObj) {
+    syncResult = await restoreMpStorageState(miniProgram, stateObj, false);
+  }
+
+  // Navigate to target route
+  let page;
+  if (args.route) {
+    const normalizedRoute = args.route.startsWith('/') ? args.route : `/${args.route}`;
+    page = await miniProgram.reLaunch(normalizedRoute);
+  } else {
+    page = await miniProgram.currentPage();
+  }
+
+  await page.waitFor(Number(args.waitMs) || 500);
+
+  // Auto Self-Healing: If we used a cached state and the app redirected us back to the login page,
+  // our cached token expired! Automatically re-login once and re-navigate.
+  const loginRouteClean = String(args.loginRoute || '/pages/login/index').replace(/^\/+/, '');
+  const currentPathClean = String(page?.path || '').replace(/^\/+/, '');
+  const wasRedirectedToLogin =
+    fromCache &&
+    args.route &&
+    !String(args.route).replace(/^\/+/, '').startsWith(loginRouteClean) &&
+    currentPathClean.startsWith(loginRouteClean);
+
+  if (wasRedirectedToLogin && (args.username || args.loginUrl)) {
+    stateObj = await executeFreshLogin();
+    if (stateObj) {
+      fs.mkdirSync(path.dirname(statePath), { recursive: true });
+      fs.writeFileSync(statePath, JSON.stringify(stateObj, null, 2));
+      syncResult = await restoreMpStorageState(miniProgram, stateObj, false);
+      const normalizedRoute = args.route.startsWith('/') ? args.route : `/${args.route}`;
+      page = await miniProgram.reLaunch(normalizedRoute);
+      await page.waitFor(Number(args.waitMs) || 500);
+      fromCache = false;
+    }
+  }
+
+  const authSummary = hasAuthCredentials || stateObj
+    ? {
+        role: stateObj?.role || args.role || 'default',
+        authMethod: stateObj?.authMethod || (fromCache ? 'cached-state' : 'none'),
+        fromCache,
+        autoReloginTriggered: wasRedirectedToLogin,
+        stateFile: fs.existsSync(statePath) ? statePath : null,
+        ...(syncResult || {}),
+      }
+    : null;
+
+  return { authSummary, page };
 }
