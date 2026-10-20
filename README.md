@@ -111,32 +111,32 @@ node scripts/check-mp-bundle.mjs ./dist/dev/mp-weixin
 Routes checked : 28 (4 main, 3 subpackages)
 Total size     : 3412.6 KB (Limit: 20,480 KB)
   - main (主包)                 :   1120.4 KB [OK]
-  - subpackage:subpages/elder  :   1480.2 KB [OK]
-  - subpackage:subpages/care   :    812.0 KB [OK]
+  - subpackage:subpages/order  :   1480.2 KB [OK]
+  - subpackage:subpages/user   :    812.0 KB [OK]
 [PASS] All Mini Program pages and subpackages verified intact.
 ```
 
 ### 2. Full Inspection: Direct Route + MVVM Data + `rpx`/`px` Geometry + AABB Occlusion + Screenshot (`inspect-mp.mjs`)
-Jump straight into a deep subpackage page with injected auth storage, verify container width in both `px` and `rpx`, check if a dropdown or bottom button is covered by a fixed bar, and save a simulator screenshot:
+Jump straight into a deep subpackage page with standardized role auth, capture the exact `wx.request` network payload fired by the page, verify container width in both `px` and `rpx`, check if a dropdown or bottom button is covered by a fixed bar, and save a simulator screenshot:
 
 ```bash
 node scripts/inspect-mp.mjs \
   --ws "ws://127.0.0.1:9420" \
   --bounce-route "/pages/index/index" \
-  --route "/staff-packages/leave-management/shift-change-detail/index?id=20" \
-  --role "zhou_yutong" \
+  --route "/subpages/order/detail?id=1001" \
+  --role "staff" \
   --login-route "/pages/login/index" \
-  --username "15233668926" \
-  --password "***" \
-  --capture-api "/api/v1/shift-change/20" \
-  --save-api-json "./shift-change-20-phone.json" \
-  --read-text '{"reliefPerson":".relief-person-value","title":".nav-title"}' \
+  --username "user_alice" \
+  --password "Password123!" \
+  --capture-api "/api/v1/orders/1001" \
+  --save-api-json "./order-1001-response.json" \
+  --read-text '{"orderNo":".order-no","title":".nav-title"}' \
   --parent ".page-container" \
-  --target ".form-card" \
+  --target ".detail-card" \
   --occlude ".dropdown-menu" \
   --occluders ".fixed-header, .sticky-col, .fixed-footer" \
-  --data-path "formData" \
-  --screenshot "./shift_change_detail_20_phone.png"
+  --data-path "detailData" \
+  --screenshot "./mp-verify.png"
 ```
 
 ### 🔐 Standardized Multi-Role Auth (`StorageState` Pattern — Zero Hardcoded Keys)
@@ -145,8 +145,8 @@ Real-world Mini Programs authenticate in diverse ways: some use **username/passw
 `fast-mp-inspector` implements a **Playwright-style `StorageState` standard** (`scripts/auth-helper.mjs`) with **3 standardized strategies**:
 
 1. **Strategy 1: `ui-password` (Standard Username/Password UI Login $\rightarrow$ Full `wx.getStorageInfoSync` Snapshot)**
-   - On the first run for `--role nurse`, jumps to `--login-route`, inputs `--username` and `--password` via native WXML `<input>` selectors (`--user-selector`, `--pass-selector`, `--submit-selector`), and taps login.
-   - Once the Mini Program finishes its own encryption and login hooks, `fast-mp-inspector` calls `wx.getStorageInfoSync().keys` to **automatically enumerate and snapshot EVERY storage key + `getApp().globalData`** into `.auth-cache/nurse.state.json`.
+   - On the first run for `--role staff`, jumps to `--login-route`, inputs `--username` and `--password` via native WXML `<input>` selectors (`--user-selector`, `--pass-selector`, `--submit-selector`), and taps login.
+   - Once the Mini Program finishes its own encryption and login hooks, `fast-mp-inspector` calls `wx.getStorageInfoSync().keys` to **automatically enumerate and snapshot EVERY storage key + `getApp().globalData`** into `.auth-cache/staff.state.json`.
    - On subsequent runs, restores the entire `.state.json` into both `Storage` and `globalData` in **0ms** and jumps straight to `--route`. If redirected back to `--login-route` (token expired), it **automatically re-runs the password login and refreshes the snapshot**!
 2. **Strategy 2: `--dump-auth` / `--load-auth` (Live DevTools Session Recording & Replay)**
    - Log in manually once in WeChat DevTools (even with SMS/captcha/WeChat OAuth), then run `node scripts/inspect-mp.mjs --ws ws://127.0.0.1:9420 --dump-auth .auth-cache/admin.state.json`. Replay anytime via `--load-auth`.
@@ -157,7 +157,8 @@ Real-world Mini Programs authenticate in diverse ways: some use **username/passw
 ```json
 {
   "elapsedMs": 640,
-  "route": "/subpages/elder/residence-change",
+  "route": "/subpages/order/detail",
+  "bouncedVia": "/pages/index/index",
   "systemInfo": {
     "windowWidth": 375,
     "windowHeight": 667,
@@ -165,16 +166,20 @@ Real-world Mini Programs authenticate in diverse ways: some use **username/passw
     "rpxToPxRatio": 0.5,
     "platform": "devtools"
   },
-  "dataPath": "formData",
+  "dataPath": "detailData",
   "pageData": {
-    "elderId": 91,
-    "elderName": "张长者",
-    "bedCode": "A-302-01",
+    "id": 1001,
+    "orderNo": "ORD-2026-1001",
+    "assigneeName": "Alice",
     "status": "APPROVED"
+  },
+  "renderedText": {
+    "orderNo": "ORD-2026-1001",
+    "title": "Order Detail"
   },
   "layout": {
     "parentSelector": ".page-container",
-    "targetSelector": ".form-card",
+    "targetSelector": ".detail-card",
     "parentRect": { "left": 0, "right": 375, "width": 375 },
     "targetRect": { "left": 12, "top": 16, "right": 363, "bottom": 520, "width": 351, "height": 504 },
     "leftGapPx": 12,
@@ -229,16 +234,16 @@ import {
 } from './examples/mp-assertion-recipes.mjs';
 
 // 1. Assert MVVM state directly
-await assertMpPageData(page, { 'formData.status': 'APPROVED' });
+await assertMpPageData(page, { 'detailData.status': 'APPROVED' });
 
 // 2. Assert card stretches horizontally within 24px gap
-await assertMpFullWidthLayout(page, '.page-container', '.form-card', 24);
+await assertMpFullWidthLayout(page, '.page-container', '.detail-card', 24);
 
 // 3. Assert dropdown is not occluded by fixed headers/footers
 await assertMpNotOccluded(miniProgram, '.dropdown-menu', '.fixed-header, .fixed-footer');
 
 // 4. Trigger Page method directly without slow UI clicking
-await triggerMpComponentMethod(page, 'onConfirmSubmit', { id: 91 });
+await triggerMpComponentMethod(page, 'onConfirmSubmit', { id: 1001 });
 
 // 5. Save simulator screenshot
 await captureMpScreenshot(miniProgram, './verified.png');
@@ -255,7 +260,7 @@ Don't have WeChat DevTools installed on your CI server or current machine? `fast
 npm test
 
 # Run the CLI in mock mode to preview the JSON diagnostic report & screenshot output:
-node scripts/inspect-mp.mjs --mock --parent .page-container --target .form-card --occlude .dropdown-menu --screenshot ./mock.png
+node scripts/inspect-mp.mjs --mock --parent .page-container --target .detail-card --occlude .dropdown-menu --screenshot ./mock.png
 ```
 
 ---

@@ -32,8 +32,8 @@ async function runTests() {
       pages: ['pages/index/index'],
       subPackages: [
         {
-          root: 'subpages/elder',
-          pages: ['residence-change'],
+          root: 'subpages/order',
+          pages: ['detail'],
         },
       ],
     };
@@ -43,9 +43,9 @@ async function runTests() {
     fs.writeFileSync(path.join(tmpDir, 'pages/index/index.wxml'), '<view class="page-container"></view>');
     fs.writeFileSync(path.join(tmpDir, 'pages/index/index.wxss'), '.page-container { width: 750rpx; }');
 
-    fs.mkdirSync(path.join(tmpDir, 'subpages/elder'), { recursive: true });
-    fs.writeFileSync(path.join(tmpDir, 'subpages/elder/residence-change.js'), 'Page({})');
-    fs.writeFileSync(path.join(tmpDir, 'subpages/elder/residence-change.wxml'), '<view class="form-card"></view>');
+    fs.mkdirSync(path.join(tmpDir, 'subpages/order'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'subpages/order/detail.js'), 'Page({})');
+    fs.writeFileSync(path.join(tmpDir, 'subpages/order/detail.wxml'), '<view class="detail-card"></view>');
 
     const passReport = checkMpBundle(tmpDir);
     assert.equal(passReport.ok, true, 'Valid bundle should pass checkMpBundle');
@@ -53,7 +53,7 @@ async function runTests() {
     console.log('  [PASS] Valid main package + subpackage verified intact.');
 
     // Simulate mid-build missing/truncated file
-    fs.writeFileSync(path.join(tmpDir, 'subpages/elder/residence-change.js'), '');
+    fs.writeFileSync(path.join(tmpDir, 'subpages/order/detail.js'), '');
     const failReport = checkMpBundle(tmpDir);
     assert.equal(failReport.ok, false, 'Truncated 0-byte subpackage JS should fail checkMpBundle');
     assert.equal(failReport.emptyFiles.length, 1);
@@ -62,26 +62,26 @@ async function runTests() {
     console.log('=== [2/3] Testing Layer 3 & 4: Standardized UI-Password Login -> StorageState Snapshot -> Fast Replay ===');
     const mockMp = createMockMiniProgramSession();
     const shotPath = path.join(tmpDir, 'verify-shot.png');
-    const stateFile = path.join(tmpDir, 'nurse.state.json');
+    const stateFile = path.join(tmpDir, 'staff.state.json');
 
     // Run 1: UI Username/Password login on /pages/login/index -> auto-dumps ALL custom storage keys (uni_id_token, permissions, etc.)
     const firstRun = await runInspectionWithSession(mockMp, {
-      route: '/subpages/elder/residence-change?id=91',
-      role: 'nurse',
+      route: '/subpages/order/detail?id=1001',
+      role: 'staff',
       loadAuth: stateFile,
       loginRoute: '/pages/login/index',
-      username: 'nurse_zhang',
+      username: 'user_alice',
       password: 'Password123!',
       parent: '.page-container',
-      target: '.form-card',
+      target: '.detail-card',
       occlude: '.dropdown-menu',
       occluders: '.sticky-col',
-      dataPath: 'formData',
+      dataPath: 'detailData',
       waitMs: '10',
       screenshot: shotPath,
     });
 
-    assert.equal(firstRun.route, '/subpages/elder/residence-change');
+    assert.equal(firstRun.route, '/subpages/order/detail');
     assert.equal(firstRun.auth.authMethod, 'ui-password');
     assert.equal(firstRun.auth.fromCache, false);
     assert.ok(firstRun.auth.syncedStorageKeys.includes('uni_id_token'), 'Should capture arbitrary app storage key uni_id_token');
@@ -89,33 +89,33 @@ async function runTests() {
     assert.ok(fs.existsSync(stateFile), 'StorageState file should be saved to disk');
 
     // Run 2: Subsequent run with same role/stateFile + bounceRoute + live wx.request capture + readText
-    const apiJsonPath = path.join(tmpDir, 'shift-change-20-phone.json');
+    const apiJsonPath = path.join(tmpDir, 'order-1001-response.json');
     const secondRun = await runInspectionWithSession(mockMp, {
-      route: '/subpages/elder/residence-change?id=91',
+      route: '/subpages/order/detail?id=1001',
       bounceRoute: '/pages/index/index',
-      captureApi: '/shift-change/20',
+      captureApi: '/api/v1/orders/1001',
       saveApiJson: apiJsonPath,
-      readText: JSON.stringify({ reliefPerson: '.form-card' }),
-      role: 'nurse',
+      readText: JSON.stringify({ orderNo: '.detail-card' }),
+      role: 'staff',
       loadAuth: stateFile,
-      username: 'nurse_zhang',
+      username: 'user_alice',
       password: 'Password123!',
       parent: '.page-container',
-      target: '.form-card',
+      target: '.detail-card',
       occlude: '.dropdown-menu',
       occluders: '.sticky-col',
-      dataPath: 'formData',
+      dataPath: 'detailData',
       waitMs: '10',
       screenshot: shotPath,
     });
 
     assert.equal(secondRun.auth.fromCache, true, 'Second run should load directly from cached StorageState');
     assert.equal(secondRun.bouncedVia, '/pages/index/index');
-    assert.equal(secondRun.renderedText.reliefPerson, '周雨彤');
+    assert.equal(secondRun.renderedText.orderNo, 'ORD-2026-1001');
     assert.equal(secondRun.capturedRequests.length, 1);
     assert.equal(secondRun.capturedRequests[0].statusCode, 200);
     assert.ok(fs.existsSync(apiJsonPath), 'Captured wx.request JSON should be saved to disk');
-    assert.equal(secondRun.pageData.elderId, 91);
+    assert.equal(secondRun.pageData.id, 1001);
     assert.equal(secondRun.layout.leftGapPx, 12);
     assert.equal(secondRun.layout.rightGapPx, 12);
     assert.equal(secondRun.layout.leftGapRpx, 24);
@@ -126,14 +126,14 @@ async function runTests() {
 
     console.log('=== [3/3] Testing Reusable Assertion Recipes ===');
     const page = await mockMp.currentPage();
-    const widthMetrics = await assertMpFullWidthLayout(page, '.page-container', '.form-card', 16);
+    const widthMetrics = await assertMpFullWidthLayout(page, '.page-container', '.detail-card', 16);
     assert.equal(widthMetrics.leftGapPx, 12);
 
     const dataCheck = await assertMpPageData(page, {
-      'formData.elderId': 91,
-      'formData.status': 'APPROVED',
+      'detailData.id': 1001,
+      'detailData.status': 'APPROVED',
     });
-    assert.equal(dataCheck['formData.elderId'], 91);
+    assert.equal(dataCheck['detailData.id'], 1001);
 
     await assert.rejects(
       async () => {

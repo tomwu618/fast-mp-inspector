@@ -72,13 +72,13 @@ Bypass slow UI login flows and multi-step `tabBar` tapping via `miniprogram-auto
    ```
 3. **Jump Directly to Any Deep Subpackage Route**:
    ```js
-   const page = await miniProgram.reLaunch('/subpages/elder/residence-change?id=91');
+   const page = await miniProgram.reLaunch('/subpages/order/detail?id=1001');
    await page.waitFor(500);
    ```
 4. **Trigger Business Logic or Custom Events Without UI Tapping**:
    ```js
    // Directly invoke a Page method defined in Page({ onConfirmTap(e) {} })
-   await page.callMethod('onConfirmTap', { currentTarget: { dataset: { id: 91 } } });
+   await page.callMethod('onConfirmTap', { currentTarget: { dataset: { id: 1001 } } });
    ```
 
 ---
@@ -88,8 +88,8 @@ Bypass slow UI login flows and multi-step `tabBar` tapping via `miniprogram-auto
 ### 4.1 Direct MVVM State Assertion (`page.data()`)
 Before parsing WXML text, inspect the reactive data model directly from AppService:
 ```js
-const formData = await page.data('form');
-const listCount = (await page.data('elderList'))?.length ?? 0;
+const detailData = await page.data('detail');
+const itemCount = (await page.data('items'))?.length ?? 0;
 ```
 
 ### 4.2 Single-Roundtrip Geometry & Computed WXSS via `NodesRef.fields()`
@@ -143,8 +143,8 @@ const layoutMetrics = await miniProgram.evaluate(({ parentSel, targetSel }) => {
 Because `document.elementFromPoint(x, y)` is unavailable in AppService, detect whether a target element (e.g., a bottom action button or dropdown) is covered by fixed/sticky overlays (`.fixed-footer`, `.custom-nav`, `.modal-mask`) using **Axis-Aligned Bounding Box (AABB) intersection + Computed `z-index` comparison** inside `inspect-mp.mjs`.
 
 ### 4.4 Live In-Page `wx.request` Capture & Simulator Screenshot Guardrails
-- **NEVER use external `curl` or hand-write fake JSON files** when verifying what an active Mini Program page requested. Use `--bounce-route "/pages/index/index" --capture-api "/shift-change/20" --save-api-json ./response.json` so `inspect-mp.mjs` leaves the page, hooks `wx.request` inside AppService, re-enters the target route, and saves the exact HTTP `statusCode` and `res.data` received by that page.
-- **NEVER use OS window `screencapture` + image cropping (`sips`/`magick`) on the WeChat DevTools Debugger (`Console`/`Network`/`Wxml` panels)** to pretend you captured the phone simulator. Always use `miniProgram.screenshot({ path })` (`--screenshot`) with the DevTools **Simulator (模拟器)** pane visible, and use `--read-text '{"reliefPerson":".relief-person"}'` to extract rendered WXML text deterministically.
+- **NEVER use external `curl` or hand-write fake JSON files** when verifying what an active Mini Program page requested. Use `--bounce-route "/pages/index/index" --capture-api "<api-path-pattern>" --save-api-json ./response.json` so `inspect-mp.mjs` leaves the page, hooks `wx.request` inside AppService, re-enters the target route, and saves the exact HTTP `statusCode` and `res.data` received by that page.
+- **NEVER use OS window `screencapture` + image cropping (`sips`/`magick`) on the WeChat DevTools Debugger (`Console`/`Network`/`Wxml` panels)** to pretend you captured the phone simulator. Always use `miniProgram.screenshot({ path })` (`--screenshot`) with the DevTools **Simulator (模拟器)** pane visible, and use `--read-text '{"title":".nav-title","status":".status-text"}'` to extract rendered WXML text deterministically.
 
 ---
 

@@ -7,13 +7,13 @@
  * Usage (Connect to running DevTools automation port - fastest, <100ms):
  *   node scripts/inspect-mp.mjs \
  *     --ws "ws://127.0.0.1:9420" \
- *     --route "/pages/elder/residence-change?id=91" \
+ *     --route "/subpages/order/detail?id=1001" \
  *     --storage '{"token":"eyJhbG..."}' \
  *     --parent ".page-container" \
- *     --target ".form-card" \
+ *     --target ".detail-card" \
  *     --occlude ".dropdown-menu" \
  *     --occluders ".fixed-header, .sticky-table-col, .bottom-bar" \
- *     --data-path "formData" \
+ *     --data-path "detailData" \
  *     --screenshot "./mp-report.png"
  *
  * Usage (Auto-launch WeChat DevTools):
@@ -503,9 +503,9 @@ export function createMockMiniProgramSession() {
   const DUMMY_PNG_B64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
   const storage = new Map();
-  let currentRoute = '/pages/elder/residence-change';
+  let currentRoute = '/subpages/order/detail';
   const pageData = {
-    formData: { elderId: 91, elderName: '张长者', bedCode: 'A-302-01', status: 'APPROVED' },
+    detailData: { id: 1001, orderNo: 'ORD-2026-1001', assigneeName: 'Alice', status: 'APPROVED' },
     loading: false,
   };
 
@@ -523,8 +523,9 @@ export function createMockMiniProgramSession() {
       position: 'relative',
       zIndex: 'auto',
     },
-    '.form-card': {
-      id: 'residence-card',
+    '.detail-card': {
+      id: 'detail-card',
+      text: 'ORD-2026-1001',
       left: 12,
       top: 16,
       right: 363,
@@ -586,10 +587,10 @@ export function createMockMiniProgramSession() {
             storage.set(sel.includes('username') ? 'lastInputUsername' : 'lastInputPassword', val);
           },
           async tap() {
-            // Simulate Mini Program login writing multiple custom storage keys (e.g. uni_id_token, roleList)
+            // Simulate Mini Program login writing multiple custom storage keys (e.g. uni_id_token, permissions)
             storage.set('uni_id_token', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.mock');
-            storage.set('userInfo', { username: storage.get('lastInputUsername'), role: 'NURSE' });
-            storage.set('permissions', ['elder:view', 'elder:edit']);
+            storage.set('userInfo', { username: storage.get('lastInputUsername'), role: 'STAFF' });
+            storage.set('permissions', ['order:view', 'order:edit']);
             currentRoute = '/pages/index/index';
           },
         };
@@ -599,7 +600,7 @@ export function createMockMiniProgramSession() {
       return {
         async tap() {},
         async text() {
-          return m.text ?? '周雨彤';
+          return m.text ?? '';
         },
         async size() {
           return { width: m.width, height: m.height };
@@ -654,15 +655,13 @@ export function createMockMiniProgramSession() {
       if (!arg && fn.toString().includes('__FAST_MP_CAPTURED_REQUESTS__')) {
         return [
           {
-            url: 'https://spark-api-dev.brtel.link:8008/api/v1/shift-change/20',
+            url: 'https://api.example.com/api/v1/orders/1001',
             method: 'GET',
             statusCode: 200,
             data: {
-              id: 20,
-              applicantName: '周雨彤',
-              reliefPersonId: '22',
-              reliefPersonName: '周雨彤',
-              reason: '核对1019调班详情',
+              id: 1001,
+              orderNo: 'ORD-2026-1001',
+              assigneeName: 'Alice',
               status: 'APPROVED',
             },
             durationMs: 42,
@@ -674,7 +673,7 @@ export function createMockMiniProgramSession() {
         const storageMap = Object.fromEntries(storage.entries());
         return {
           storageMap,
-          globalDataMap: { isLogin: true, role: storageMap.userInfo?.role || 'NURSE' },
+          globalDataMap: { isLogin: true, role: storageMap.userInfo?.role || 'STAFF' },
         };
       }
       if (arg && typeof arg === 'object' && ('sMap' in arg || 'gMap' in arg)) {
@@ -716,7 +715,7 @@ async function main() {
       'Usage:\n' +
         '  1. Attach to running DevTools : node scripts/inspect-mp.mjs --ws ws://127.0.0.1:9420 --route /pages/index/index --target .card --screenshot ./out.png\n' +
         '  2. Launch DevTools project    : node scripts/inspect-mp.mjs --project-path ./dist/dev/mp-weixin --route /pages/index/index\n' +
-        '  3. Self-test mock mode        : node scripts/inspect-mp.mjs --mock --parent .page-container --target .form-card --occlude .dropdown-menu --screenshot ./mock.png'
+        '  3. Self-test mock mode        : node scripts/inspect-mp.mjs --mock --parent .page-container --target .detail-card --occlude .dropdown-menu --screenshot ./mock.png'
     );
     process.exit(1);
   }
