@@ -1,0 +1,36 @@
+{
+  "name": "fast-mp-inspector",
+  "version": "1.0.0",
+  "description": "4-layer zero-click E2E, MVVM data, and WXSS layout/occlusion verification skill for WeChat Mini Programs (Native, uni-app, Taro) with simulator screenshot support.",
+  "type": "module",
+  "bin": {
+    "inspect-mp": "./scripts/inspect-mp.mjs",
+    "check-mp-bundle": "./scripts/check-mp-bundle.mjs"
+  },
+  "scripts": {
+    "inspect": "node ./scripts/inspect-mp.mjs",
+    "check-bundle": "node ./scripts/check-mp-bundle.mjs",
+    "test": "node ./tests/self-test.mjs"
+  },
+  "keywords": [
+    "agent-skill",
+    "claude-code",
+    "antigravity",
+    "cursor",
+    "wechat-miniprogram",
+    "miniprogram-automator",
+    "uni-app",
+    "taro",
+    "e2e-testing",
+    "wxss-layout"
+  ],
+  "author": "tomwu618",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomwu618/fast-mp-inspector.git"
+  },
+  "peerDependencies": {
+    "miniprogram-automator": ">=0.10.0"
+  }
+}
