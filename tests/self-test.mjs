@@ -65,7 +65,8 @@ async function runTests() {
 
     const report = await runInspectionWithSession(mockMp, {
       route: '/subpages/elder/residence-change?id=91',
-      storage: JSON.stringify({ token: 'mock-jwt-token' }),
+      storage: JSON.stringify({ token: 'mock-jwt-token', role: 'NURSE' }),
+      globalData: JSON.stringify({ role: 'NURSE', permissions: ['elder:edit'] }),
       parent: '.page-container',
       target: '.form-card',
       occlude: '.dropdown-menu',
@@ -76,6 +77,8 @@ async function runTests() {
     });
 
     assert.equal(report.route, '/subpages/elder/residence-change');
+    assert.deepEqual(report.auth.syncedStorageKeys, ['token', 'role']);
+    assert.deepEqual(report.auth.syncedGlobalDataKeys, ['role', 'permissions']);
     assert.equal(report.pageData.elderId, 91);
     assert.equal(report.layout.leftGapPx, 12);
     assert.equal(report.layout.rightGapPx, 12);

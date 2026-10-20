@@ -1,4 +1,5 @@
 node_modules/
+.auth-cache/
 *.png
 *.pdf
 .DS_Store

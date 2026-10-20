@@ -123,7 +123,9 @@ Jump straight into a deep subpackage page with injected auth storage, verify con
 node scripts/inspect-mp.mjs \
   --ws "ws://127.0.0.1:9420" \
   --route "/subpages/elder/residence-change?id=91" \
-  --storage '{"token":"eyJhbGciOi..."}' \
+  --role "nurse" \
+  --login-url "http://localhost:9020/api/auth/login" \
+  --login-body '{"username":"nurse01","password":"***"}' \
   --parent ".page-container" \
   --target ".form-card" \
   --occlude ".dropdown-menu" \
@@ -131,6 +133,13 @@ node scripts/inspect-mp.mjs \
   --data-path "formData" \
   --screenshot "./mp-verify.png"
 ```
+
+> **🔐 Role-Aware Zero-UI Auth (`scripts/auth-helper.mjs`)**:
+> Simply writing a fake string to `wx.setStorageSync('token')` fails when backend APIs enforce role tokens (`@PreAuthorize`) or when `App.onLaunch` has already cached user roles in `getApp().globalData`.
+> `fast-mp-inspector` solves this with 3 mechanisms:
+> 1. **Real Role Token Fetching & Disk Caching (`--role` + `--login-url`)**: Logs in against your backend API once per role (`director`, `nurse`, `family`), validates JWT `exp`, and caches the session in `.auth-cache/<role>.json` (`0ms` reuse on subsequent runs).
+> 2. **In-Simulator `wx.login()` Code Exchange (`--wx-login-exchange-url`)**: Calls `wx.login()` inside AppService to exchange a real WeChat `code` for a role token when required.
+> 3. **Dual-Layer State Sync (`--storage` + `--global-data`)**: Simultaneously populates `wx.setStorageSync` AND `getApp().globalData` before `miniProgram.reLaunch()` so role-gated views (`wx:if="{{role === 'NURSE'}}"` / `v-if`) and API interceptors work identically to a full UI login.
 
 **Output JSON:**
 ```json

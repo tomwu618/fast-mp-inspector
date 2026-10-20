@@ -25,6 +25,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { injectMpRoleSession, resolveRoleAuth } from './auth-helper.mjs';
 
 export function parseArgs(argv) {
   const args = {
@@ -32,7 +33,12 @@ export function parseArgs(argv) {
     projectPath: '',
     cliPath: '',
     route: '',
+    role: '',
+    loginUrl: '',
+    loginBody: '',
+    wxLoginExchangeUrl: '',
     storage: '',
+    globalData: '',
     tapBefore: '',
     callMethod: '',
     parent: '',
@@ -125,14 +131,30 @@ export async function runInspectionWithSession(miniProgram, args) {
     });
   }
 
-  // 1. Inject wx.setStorageSync if requested
-  if (args.storage) {
-    const parsedStorage = JSON.parse(args.storage);
-    await miniProgram.evaluate((storageMap) => {
-      for (const [k, v] of Object.entries(storageMap)) {
-        wx.setStorageSync(k, v);
-      }
-    }, parsedStorage);
+  // 1. Resolve Role Token (via API cache or CLI flags) & Inject into both Storage and getApp().globalData
+  let authReport = null;
+  let storageMap = args.storage ? JSON.parse(args.storage) : {};
+  let globalDataMap = args.globalData ? JSON.parse(args.globalData) : {};
+
+  if (args.role && args.loginUrl) {
+    const resolved = await resolveRoleAuth({
+      role: args.role,
+      loginUrl: args.loginUrl,
+      loginBody: args.loginBody || {},
+    });
+    storageMap = { ...resolved.storageMap, ...storageMap };
+    globalDataMap = { ...resolved.globalDataMap, ...globalDataMap };
+    authReport = { role: resolved.role, fromCache: resolved.fromCache };
+  }
+
+  if (Object.keys(storageMap).length > 0 || Object.keys(globalDataMap).length > 0 || args.wxLoginExchangeUrl) {
+    const syncRes = await injectMpRoleSession(miniProgram, {
+      storageMap,
+      globalDataMap,
+      wxLoginExchangeUrl: args.wxLoginExchangeUrl,
+      role: args.role || 'default',
+    });
+    authReport = { ...(authReport || {}), ...syncRes };
   }
 
   // 2. Navigate directly via reLaunch or grab current page
@@ -369,6 +391,7 @@ export async function runInspectionWithSession(miniProgram, args) {
   return {
     elapsedMs: Date.now() - t0,
     route: page.path || args.route || '/pages/index/index',
+    auth: authReport,
     systemInfo: rawQueryReport.systemInfo,
     dataPath: args.dataPath || '(root)',
     pageData: pageDataSnapshot,
@@ -515,7 +538,18 @@ export function createMockMiniProgramSession() {
           occluderNodes: arg.occludeSel ? mockOccluders : [],
         };
       }
-      // Storage injection simulation
+      // Storage + globalData injection simulation
+      if (arg && typeof arg === 'object' && ('sMap' in arg || 'gMap' in arg)) {
+        const sKeys = Object.keys(arg.sMap || {});
+        const gKeys = Object.keys(arg.gMap || {});
+        for (const [k, v] of Object.entries(arg.sMap || {})) {
+          storage.set(k, v);
+        }
+        return {
+          syncedStorageKeys: sKeys,
+          syncedGlobalDataKeys: gKeys,
+        };
+      }
       if (arg && typeof arg === 'object') {
         for (const [k, v] of Object.entries(arg)) {
           storage.set(k, v);
