@@ -144,7 +144,8 @@ Because `document.elementFromPoint(x, y)` is unavailable in AppService, detect w
 
 ### 4.4 Live In-Page `wx.request` Capture & Simulator Screenshot Guardrails
 - **NEVER use external `curl` or hand-write fake JSON files** when verifying what an active Mini Program page requested. Use `--bounce-route "/pages/index/index" --capture-api "<api-path-pattern>" --save-api-json ./response.json` so `inspect-mp.mjs` leaves the page, hooks `wx.request` inside AppService, re-enters the target route, and saves the exact HTTP `statusCode` and `res.data` received by that page.
-- **NEVER use OS window `screencapture` + image cropping (`sips`/`magick`) on the WeChat DevTools Debugger (`Console`/`Network`/`Wxml` panels)** to pretend you captured the phone simulator. Always use `miniProgram.screenshot({ path })` (`--screenshot`) with the DevTools **Simulator (模拟器)** pane visible, and use `--read-text '{"title":".nav-title","status":".status-text"}'` to extract rendered WXML text deterministically.
+- **NEVER use OS window `screencapture` + image cropping/tiling (`sips`/`magick`/Python PIL)** to inspect the WeChat DevTools GUI window or slice it into dozens of tiles! That pollutes the workspace and report with dozens of garbage debugger fragments.
+- **Preventing `EADDRINUSE` & Automator Timeouts**: Never manually invoke `cli --auto --auto-port 9420` or `automator.launch()` when WeChat DevTools is already open on port `9420` (doing so triggers a blocking `BackendManager listen EADDRINUSE` crash dialog inside DevTools). Always use `scripts/inspect-mp.mjs`, which automatically probes `127.0.0.1:9420` first to attach via `automator.connect()`, auto-resolves `dist/build/mp-weixin` or `dist/dev/mp-weixin`, and dynamically allocates a free port when launching a new instance.
 
 ---
 

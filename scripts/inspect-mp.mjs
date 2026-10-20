@@ -24,6 +24,7 @@
  */
 
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { ensureStandardMpAuthAndNavigate } from './auth-helper.mjs';
 
@@ -110,6 +111,127 @@ export function computeAabbIntersection(rectA, rectB) {
     overlapHeight: Math.round(yOverlap),
     overlapArea: Math.round(overlapArea),
     overlapRatioOfTarget: Number((overlapArea / areaA).toFixed(4)),
+  };
+}
+
+/**
+ * Check if a TCP port on 127.0.0.1 is already accepting connections (within 250ms)
+ */
+export function isPortOpen(port, host = '127.0.0.1', timeoutMs = 250) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const done = (result) => {
+      if (!settled) {
+        settled = true;
+        socket.destroy();
+        resolve(result);
+      }
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+    socket.connect(port, host);
+  });
+}
+
+/**
+ * Find an available free TCP port on 127.0.0.1 to prevent `listen EADDRINUSE` crashes in WeChat DevTools
+ */
+export function getFreePort(host = '127.0.0.1') {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.listen(0, host, () => {
+      const addr = srv.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+      srv.close(() => resolve(port));
+    });
+    srv.once('error', reject);
+  });
+}
+
+/**
+ * Smart Connection Manager:
+ * Prevents the notorious WeChat DevTools `BackendManager listen EADDRINUSE` dialog & automator timeouts!
+ * 1. If `--ws` is provided (or default port 9420 is already open), connects via `automator.connect()` with a fast timeout.
+ * 2. Never blindly runs `automator.launch()` onto an already-occupied port.
+ * 3. Automatically resolves `dist/build/mp-weixin` or `dist/dev/mp-weixin` sub-paths if the user passed a parent wrapper repo.
+ */
+export async function smartConnectOrLaunchMp(automator, args) {
+  const defaultPort = 9420;
+  let wsUrl = args.ws;
+
+  // Step 1: If no --ws flag was explicitly passed, probe whether 127.0.0.1:9420 is ALREADY open!
+  // If open, attach directly instead of calling launch() (which causes EADDRINUSE in WeChat DevTools).
+  if (!wsUrl) {
+    const port9420Open = await isPortOpen(defaultPort);
+    if (port9420Open) {
+      wsUrl = `ws://127.0.0.1:${defaultPort}`;
+    }
+  }
+
+  // Step 2: Try fast WebSocket attach first (with 8s timeout guard so it never hangs forever)
+  if (wsUrl) {
+    try {
+      const mp = await Promise.race([
+        automator.connect({ wsEndpoint: wsUrl }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`WebSocket connect to ${wsUrl} timed out after 8000ms`)), 8000)
+        ),
+      ]);
+      return { miniProgram: mp, attachedToExistingWs: true, wsEndpoint: wsUrl };
+    } catch (connectErr) {
+      if (!args.projectPath) {
+        throw new Error(
+          `Failed to connect to WeChat DevTools at ${wsUrl}: ${connectErr.message}. ` +
+            `Check if WeChat DevTools has a modal dialog open (e.g. EADDRINUSE) or pass --project-path to launch.`
+        );
+      }
+      // If connect failed and --project-path is available, fall through to launch on a clean free port
+    }
+  }
+
+  if (!args.projectPath) {
+    throw new Error(
+      'No active WeChat DevTools automation port found on 127.0.0.1:9420 and no --project-path specified.'
+    );
+  }
+
+  // Step 3: Auto-resolve actual Mini Program bundle directory containing `project.config.json` or `app.json`
+  let resolvedProjectPath = path.resolve(args.projectPath);
+  const subCandidates = [
+    resolvedProjectPath,
+    path.join(resolvedProjectPath, 'dist/build/mp-weixin'),
+    path.join(resolvedProjectPath, 'dist/dev/mp-weixin'),
+    path.join(resolvedProjectPath, 'unpackage/dist/build/mp-weixin'),
+    path.join(resolvedProjectPath, 'unpackage/dist/dev/mp-weixin'),
+    path.join(resolvedProjectPath, 'dist'),
+  ];
+  const validSub = subCandidates.find(
+    (dir) => fs.existsSync(path.join(dir, 'app.json')) || fs.existsSync(path.join(dir, 'project.config.json'))
+  );
+  if (validSub) {
+    resolvedProjectPath = validSub;
+  }
+
+  // Step 4: Allocate a guaranteed free port if 9420 is occupied/hung so WeChat DevTools NEVER throws EADDRINUSE!
+  const port9420Busy = await isPortOpen(defaultPort);
+  const safePort = port9420Busy ? await getFreePort() : defaultPort;
+  const cliPath = args.cliPath || detectDefaultCliPath();
+
+  const mp = await automator.launch({
+    ...(cliPath ? { cliPath } : {}),
+    projectPath: resolvedProjectPath,
+    port: safePort,
+    timeout: 20000,
+  });
+
+  return {
+    miniProgram: mp,
+    attachedToExistingWs: false,
+    launchedPort: safePort,
+    resolvedProjectPath,
   };
 }
 
@@ -721,28 +843,28 @@ async function main() {
   }
 
   let miniProgram;
+  let connectionMeta = null;
   if (args.mock) {
     miniProgram = createMockMiniProgramSession();
+    connectionMeta = { mode: 'mock' };
   } else {
     const automatorModule = await import('miniprogram-automator');
     const automator = automatorModule.default || automatorModule;
-    if (args.ws) {
-      miniProgram = await automator.connect({ wsEndpoint: args.ws });
-    } else {
-      const cliPath = args.cliPath || detectDefaultCliPath();
-      miniProgram = await automator.launch({
-        ...(cliPath ? { cliPath } : {}),
-        projectPath: path.resolve(args.projectPath),
-      });
-    }
+    const conn = await smartConnectOrLaunchMp(automator, args);
+    miniProgram = conn.miniProgram;
+    connectionMeta = {
+      attachedToExistingWs: conn.attachedToExistingWs,
+      wsEndpoint: conn.wsEndpoint || `ws://127.0.0.1:${conn.launchedPort}`,
+      resolvedProjectPath: conn.resolvedProjectPath || null,
+    };
   }
 
   try {
     const report = await runInspectionWithSession(miniProgram, args);
-    console.log(JSON.stringify(report, null, 2));
+    console.log(JSON.stringify({ connection: connectionMeta, ...report }, null, 2));
   } finally {
     if (!args.mock && miniProgram) {
-      if (args.ws || args.keepOpen) {
+      if (connectionMeta?.attachedToExistingWs || args.ws || args.keepOpen) {
         await miniProgram.disconnect?.();
       } else {
         await miniProgram.close?.();
