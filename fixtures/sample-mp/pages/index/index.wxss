@@ -1,0 +1,4 @@
+/* Intentional minimal style file for bundle check verification */
+.home-container {
+  padding: 24rpx;
+}

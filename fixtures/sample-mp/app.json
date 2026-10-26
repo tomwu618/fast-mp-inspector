@@ -1,0 +1,17 @@
+{
+  "pages": [
+    "pages/index/index"
+  ],
+  "subPackages": [
+    {
+      "root": "subpages/order",
+      "name": "order-pkg",
+      "pages": [
+        "detail"
+      ]
+    }
+  ],
+  "window": {
+    "navigationBarTitleText": "Order Workbench MP"
+  }
+}

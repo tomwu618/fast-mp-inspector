@@ -1,19 +1,28 @@
 {
   "name": "fast-mp-inspector",
-  "version": "1.0.0",
-  "description": "4-layer zero-click E2E, MVVM data, and WXSS layout/occlusion verification skill for WeChat Mini Programs (Native, uni-app, Taro) with simulator screenshot support.",
+  "version": "1.1.0",
+  "description": "4-layer zero-click E2E, MVVM data, WXSS layout/occlusion, and live wx.request verification skill + MCP stdio server for WeChat Mini Programs (Native, uni-app, Taro).",
   "type": "module",
+  "engines": {
+    "node": ">=18.18.0"
+  },
   "bin": {
     "inspect-mp": "./scripts/inspect-mp.mjs",
-    "check-mp-bundle": "./scripts/check-mp-bundle.mjs"
+    "check-mp-bundle": "./scripts/check-mp-bundle.mjs",
+    "fast-mp-mcp": "./mcp/server.mjs"
   },
   "scripts": {
     "inspect": "node ./scripts/inspect-mp.mjs",
     "check-bundle": "node ./scripts/check-mp-bundle.mjs",
-    "test": "node ./tests/self-test.mjs"
+    "mcp": "node ./mcp/server.mjs",
+    "test": "node ./tests/self-test.mjs && node ./tests/verify-mcp.mjs",
+    "verify-mcp": "node ./tests/verify-mcp.mjs"
   },
   "keywords": [
     "agent-skill",
+    "mcp",
+    "mcp-server",
+    "openmausbot",
     "claude-code",
     "antigravity",
     "cursor",
@@ -30,7 +39,7 @@
     "type": "git",
     "url": "git+https://github.com/tomwu618/fast-mp-inspector.git"
   },
-  "peerDependencies": {
-    "miniprogram-automator": ">=0.10.0"
+  "dependencies": {
+    "miniprogram-automator": "^0.12.1"
   }
 }

@@ -1,270 +1,99 @@
-# ⚡ fast-mp-inspector
+# fast-mp-inspector
 
-> **"Stop making your AI agent tap through 5 TabBars and dump 10,000-line WXML trees. Verify WeChat Mini Programs in 1 second with subpackage probes, AppService `page.data()`, `SelectorQuery` geometry math, and instant simulator screenshots."**
->
-> **专为微信小程序（原生 / uni-app / Taro）打造的零点击极速 E2E、MVVM 数据与 WXSS 几何/遮挡断言 Agent Skill —— 支持模拟器一键截图与无界面数学级校验。**
+**4-Layer Zero-Click E2E, MVVM Data, WXSS Layout/Occlusion & In-Page `wx.request` Verification Skill + Standard MCP Server for WeChat Mini Programs**
 
-[![Agent Skill](https://img.shields.io/badge/Agent_Skill-SKILL.md-07c160?style=flat-square)](./SKILL.md)
-[![SDK](https://img.shields.io/badge/SDK-miniprogram--automator-1aad19?style=flat-square)](https://developers.weixin.qq.com/miniprogram/dev/devtools/auto/)
-[![Frameworks](https://img.shields.io/badge/Supports-Native_%7C_uni--app_%7C_Taro-3b82f6?style=flat-square)](#)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](./LICENSE)
+`fast-mp-inspector` provides both:
+1. **Skill + CLI (`scripts/inspect-mp.mjs`, `scripts/check-mp-bundle.mjs`)**: Drop-in CLI workflow for Claude Code, Cursor, Antigravity, and terminal agents.
+2. **Standard MCP Server (`mcp/server.mjs`)**: JSON-RPC 2.0 `stdio` Model Context Protocol server designed for **OpenMausBot** and MCP hosts, sharing the same core execution engine (`src/mp-core.mjs`).
 
 ---
 
-## 🧐 Why Another Mini-Program Tool? How Does It Differ from Existing Open-Source MCPs?
-## 与现有开源小程序 MCP / Skill 的核心区别
+## 1. Runtime Requirements & Reproducible Installation
 
-We surveyed the leading open-source WeChat Mini Program AI tools on GitHub (`DoraemonHugU/miniprogram-browser`, `WaterTian/wechat-devtools-mcp`, `mileson/weapp-devtools-mcp`, and `Chaixueyuan/weapp-agent-mcp`). While they successfully bridge WeChat DevTools to AI agents, they focus on **interactive step-by-step UI clicking and WXML tree snapshots**.
+- **Node.js**: `>= 18.18.0` (tested on Node 20/22 LTS)
+- **WeChat DevTools**: Required for real simulator execution (`connect` / `launch`), with **Settings -> Security Settings -> Service Port** enabled. (Bundled fixture mode `connectionMode: "fixture"` runs offline in CI without DevTools).
 
-`fast-mp-inspector` takes a fundamentally different **"Short-Circuit + Dual-Thread Math"** approach:
-
-| Feature / Dimension | `wechat-devtools-mcp` / `weapp-agent-mcp` | `miniprogram-browser` | ⚡ **`fast-mp-inspector` (This Repo)** |
-| :--- | :--- | :--- | :--- |
-| **Architecture** | Long-running MCP Server (30+ granular tools) | Agent-Browser style step-by-step CLI | **4-Layer Short-Circuit CLI + Skill** (Single-shot JSON report) |
-| **White-Screen & Subpackage Limit Probe** | ❌ Launches DevTools and waits for timeout | ❌ Requires running DevTools session | ✅ **`check-mp-bundle.mjs` (0.05s)**: Validates `app.json` routes, `.wxml/.wxss/.js` integrity & **2MB subpackage limit** *before* touching DevTools |
-| **Dual-Thread Awareness (`AppService` vs `WebView`)** | Dumps raw WXML nodes into LLM context | Navigates & snapshots element refs | ✅ **Single-IPC `NodesRef.fields()`**: Queries `rect`, `size`, and `computedStyle` in one AppService round-trip |
-| **Layout & `rpx`/`px` Width Verification** | Eyeballs simulator screenshots | Manual element inspection | ✅ **Mathematical `px` & `rpx` Gap Assertions**: Automatically computes `leftGapPx`, `rightGapPx`, `leftGapRpx`, and `horizontalFillRatio` |
-| **Z-Index & Fixed-Bar Occlusion Detection** | ❌ Misses covered buttons (`element` still exists in WXML) | ❌ No overlap math | ✅ **AABB + `z-index` Collision Math**: Detects when `.fixed-footer`, `.custom-nav`, or `.sticky-col` covers a target element |
-| **MVVM State Verification** | Scrapes rendered WXML text | Scrapes rendered WXML text | ✅ **Direct `page.data(path)` Inspection**: Asserts reactive Vue/MiniProgram state directly in AppService |
-| **Simulator Screenshot (`miniProgram.screenshot`)** | ✅ Supported | ✅ Supported | ✅ **Supported** (`--screenshot ./out.png` or `--screenshot-base64`) alongside JSON geometry report |
-
----
-
-## 🏗️ The 4-Layer Short-Circuit Architecture / 四层短路极速验证架构
-
-WeChat Mini Programs use a **Dual-Thread Architecture** (`AppService` logic thread + `WebView/Skyline` render thread), meaning browser DOM APIs like `window.document.elementFromPoint` do **not** exist inside `miniProgram.evaluate()`. `fast-mp-inspector` is purpose-built for this runtime:
-
-```mermaid
-flowchart TD
-    A["🎯 Mini Program E2E / WXSS Verification"] --> L1
-    subgraph L1["Layer 1: Static Bundle & 2MB Subpackage Probe (0.05s)"]
-        L1A["Parse app.json (pages + subPackages)"] --> L1B["Check .js/.wxml/.wxss non-empty + <2MB per pkg"]
-    end
-    L1 -->|"Pass"| L2
-    subgraph L2["Layer 2: Git WXSS / Vue / TSX Scope Diff (0.2s)"]
-        L2A["git diff <baseline>..HEAD -- '*.wxss' '*.vue' '*.tsx'"] --> L2B["Separate global app.wxss from page-scoped styles"]
-    end
-    L2 -->|"Target Route"| L3
-    subgraph L3["Layer 3: Zero-Click Direct Jump & Storage Injection (0.4s)"]
-        L3A["wx.setStorageSync(token) in AppService"] --> L3B["miniProgram.reLaunch('/subpages/...') + page.callMethod()"]
-    end
-    L3 --> L4
-    subgraph L4["Layer 4: MVVM Data + SelectorQuery Math + Screenshot (0.5s)"]
-        L4A["MVVM: page.data('formData')"]
-        L4B["Geometry: SelectorQuery.fields({ rect, size, computedStyle })"]
-        L4C["Occlusion: AABB Intersection + Z-Index Comparison"]
-        L4D["Visual Proof: miniProgram.screenshot({ path })"]
-    end
-```
-
----
-
-## 🛠️ Installation / 安装方式
-
-### Option 1: Install via `skills` CLI
-```bash
-npx skills add tomwu618/fast-mp-inspector
-```
-
-### Option 2: Clone into Your Agent's Skills Directory
-```bash
-# For Antigravity:
-git clone git@github.com:tomwu618/fast-mp-inspector.git ~/.gemini/antigravity/skills/fast-mp-inspector
-
-# For Claude Code / Cursor:
-git clone git@github.com:tomwu618/fast-mp-inspector.git .claude/skills/fast-mp-inspector
-```
-
-### Option 3: Standalone CLI Setup
 ```bash
 git clone git@github.com:tomwu618/fast-mp-inspector.git
 cd fast-mp-inspector
-npm install
-# Run built-in self-test (no WeChat DevTools required):
-npm test
+npm ci
+```
+
+### Uninstall
+
+```bash
+# Remove MCP configuration entry from your host config, then remove the directory:
+rm -rf /path/to/fast-mp-inspector
 ```
 
 ---
 
-## 🔬 Battle-Tested Usage / 核心实战用法
+## 2. OpenMausBot / MCP Host Configuration (`stdio`)
 
-### Prerequisite: Enable WeChat DevTools Automation Port
-Open WeChat Developer Tools $\rightarrow$ *Settings -> Security Settings -> Enable Service Port*, or start the automation WebSocket port once via CLI:
-```bash
-# macOS
-/Applications/wechatwebdevtools.app/Contents/MacOS/cli --auto /path/to/mp-dist --auto-port 9420
+`mcp/server.mjs` strictly uses `stdout` for JSON-RPC 2.0 protocol frames and `stderr` for diagnostic logs. **Initializing the server and listing tools (`initialize`, `tools/list`) never launches WeChat DevTools or opens any ports.**
 
-# Windows
-"C:\Program Files (x86)\Tencent\微信web开发者工具\cli.bat" --auto D:\project\dist\dev\mp-weixin --auto-port 9420
-```
-
-### 1. Layer 1: Sub-Second Bundle & Subpackage Integrity Check (`check-mp-bundle.mjs`)
-Catch missing page files, mid-build `0-byte` truncated bundles (in `uni-app` or `Taro` watch mode), or subpackages exceeding WeChat's **2MB hard limit** in `50ms`:
-
-```bash
-node scripts/check-mp-bundle.mjs ./dist/dev/mp-weixin
-```
-
-**Output:**
-```text
-=== Mini Program Bundle Integrity Report (D:\project\dist\dev\mp-weixin) ===
-Routes checked : 28 (4 main, 3 subpackages)
-Total size     : 3412.6 KB (Limit: 20,480 KB)
-  - main (主包)                 :   1120.4 KB [OK]
-  - subpackage:subpages/order  :   1480.2 KB [OK]
-  - subpackage:subpages/user   :    812.0 KB [OK]
-[PASS] All Mini Program pages and subpackages verified intact.
-```
-
-### 2. Full Inspection: Direct Route + MVVM Data + `rpx`/`px` Geometry + AABB Occlusion + Screenshot (`inspect-mp.mjs`)
-Jump straight into a deep subpackage page with standardized role auth, capture the exact `wx.request` network payload fired by the page, verify container width in both `px` and `rpx`, check if a dropdown or bottom button is covered by a fixed bar, and save a simulator screenshot:
-
-```bash
-node scripts/inspect-mp.mjs \
-  --ws "ws://127.0.0.1:9420" \
-  --bounce-route "/pages/index/index" \
-  --route "/subpages/order/detail?id=1001" \
-  --role "staff" \
-  --login-route "/pages/login/index" \
-  --username "user_alice" \
-  --password "Password123!" \
-  --capture-api "/api/v1/orders/1001" \
-  --save-api-json "./order-1001-response.json" \
-  --read-text '{"orderNo":".order-no","title":".nav-title"}' \
-  --parent ".page-container" \
-  --target ".detail-card" \
-  --occlude ".dropdown-menu" \
-  --occluders ".fixed-header, .sticky-col, .fixed-footer" \
-  --data-path "detailData" \
-  --screenshot "./mp-verify.png"
-```
-
-### 🔐 Standardized Multi-Role Auth (`StorageState` Pattern — Zero Hardcoded Keys)
-Real-world Mini Programs authenticate in diverse ways: some use **username/password login** with frontend RSA/MD5/SM2 encryption, some write 10+ custom keys (`uni_id_token`, `access_token`, `roleList`, `pinia_user`), and some rely on `getApp().globalData`.
-
-`fast-mp-inspector` implements a **Playwright-style `StorageState` standard** (`scripts/auth-helper.mjs`) with **3 standardized strategies**:
-
-1. **Strategy 1: `ui-password` (Standard Username/Password UI Login $\rightarrow$ Full `wx.getStorageInfoSync` Snapshot)**
-   - On the first run for `--role staff`, jumps to `--login-route`, inputs `--username` and `--password` via native WXML `<input>` selectors (`--user-selector`, `--pass-selector`, `--submit-selector`), and taps login.
-   - Once the Mini Program finishes its own encryption and login hooks, `fast-mp-inspector` calls `wx.getStorageInfoSync().keys` to **automatically enumerate and snapshot EVERY storage key + `getApp().globalData`** into `.auth-cache/staff.state.json`.
-   - On subsequent runs, restores the entire `.state.json` into both `Storage` and `globalData` in **0ms** and jumps straight to `--route`. If redirected back to `--login-route` (token expired), it **automatically re-runs the password login and refreshes the snapshot**!
-2. **Strategy 2: `--dump-auth` / `--load-auth` (Live DevTools Session Recording & Replay)**
-   - Log in manually once in WeChat DevTools (even with SMS/captcha/WeChat OAuth), then run `node scripts/inspect-mp.mjs --ws ws://127.0.0.1:9420 --dump-auth .auth-cache/admin.state.json`. Replay anytime via `--load-auth`.
-3. **Strategy 3: `http-password` (`--login-url` REST API Token Exchange)**
-   - Configurable `--username-field`, `--password-field`, `--token-field`, and `--token-storage-key`.
-
-**Output JSON:**
 ```json
 {
-  "elapsedMs": 640,
-  "route": "/subpages/order/detail",
-  "bouncedVia": "/pages/index/index",
-  "systemInfo": {
-    "windowWidth": 375,
-    "windowHeight": 667,
-    "pixelRatio": 2,
-    "rpxToPxRatio": 0.5,
-    "platform": "devtools"
-  },
-  "dataPath": "detailData",
-  "pageData": {
-    "id": 1001,
-    "orderNo": "ORD-2026-1001",
-    "assigneeName": "Alice",
-    "status": "APPROVED"
-  },
-  "renderedText": {
-    "orderNo": "ORD-2026-1001",
-    "title": "Order Detail"
-  },
-  "layout": {
-    "parentSelector": ".page-container",
-    "targetSelector": ".detail-card",
-    "parentRect": { "left": 0, "right": 375, "width": 375 },
-    "targetRect": { "left": 12, "top": 16, "right": 363, "bottom": 520, "width": 351, "height": 504 },
-    "leftGapPx": 12,
-    "rightGapPx": 12,
-    "leftGapRpx": 24,
-    "rightGapRpx": 24,
-    "horizontalFillRatio": 0.936,
-    "targetComputedWXSS": {
-      "width": 351,
-      "maxWidth": "none",
-      "margin": "0px",
-      "padding": "16px",
-      "boxSizing": "border-box",
-      "position": "relative",
-      "zIndex": "1"
-    }
-  },
-  "occlusion": {
-    "selector": ".dropdown-menu",
-    "targetZIndex": "10",
-    "isOccluded": true,
-    "collisions": [
-      {
-        "id": "sticky-table-header",
-        "position": "fixed",
-        "zIndex": "50",
-        "isCoveringTarget": true,
-        "intersects": true,
-        "overlapWidth": 105,
-        "overlapHeight": 100,
-        "overlapArea": 10500,
-        "overlapRatioOfTarget": 0.6176
+  "mcpServers": {
+    "fast-mp-inspector": {
+      "command": "node",
+      "args": [
+        "/abs/path/to/fast-mp-inspector/mcp/server.mjs"
+      ],
+      "env": {
+        "FAST_MP_PROJECT_ROOT": "/abs/path/to/miniprogram-project",
+        "FAST_MP_EVIDENCE_DIR": "/abs/path/to/evidence-output",
+        "FAST_MP_DEFAULT_WS_ENDPOINT": "ws://127.0.0.1:9420",
+        "FAST_MP_ALLOWED_WS_HOSTS": "127.0.0.1,localhost",
+        "FAST_MP_ALLOWED_API_ORIGINS": "https://api.example.local",
+        "FAST_MP_DEFAULT_TIMEOUT_MS": "60000"
       }
-    ]
-  },
-  "screenshot": {
-    "savedPath": "C:\\Users\\tomwu\\Desktop\\fast-mp-inspector\\mp-verify.png",
-    "exists": true,
-    "bytes": 48210
+    }
   }
 }
 ```
 
-### 3. Programmatic Assertion Recipes (`examples/mp-assertion-recipes.mjs`)
-```js
-import {
-  assertMpFullWidthLayout,
-  assertMpNotOccluded,
-  assertMpPageData,
-  triggerMpComponentMethod,
-  captureMpScreenshot,
-} from './examples/mp-assertion-recipes.mjs';
+---
 
-// 1. Assert MVVM state directly
-await assertMpPageData(page, { 'detailData.status': 'APPROVED' });
+## 3. MCP Tools & Capabilities
 
-// 2. Assert card stretches horizontally within 24px gap
-await assertMpFullWidthLayout(page, '.page-container', '.detail-card', 24);
+| Tool Name | Side Effects | Purpose |
+|---|---|---|
+| `mp_diagnose` | None by default (`probeConnection: false`) | Returns Node, `miniprogram-automator`, WeChat CLI binary status, project `app.json` / `project.config.json` checks, and remediation steps. |
+| `mp_check_bundle` | Read-only static scan | Validates `app.json` routes, `mainPackage` / `subPackages` size limits (`limits` configurable), `ruleSource`, and `.wxss` syntax (supports `allowEmptyStyles: true` for 0-byte `.wxss`). |
+| `mp_inspect` | Connects to simulator, writes evidence files | Runs 4-layer Mini Program inspection (Runtime errors, MVVM `page.data`, WXML/WXSS bounding boxes & occlusion, in-page `wx.request` capture, simulator PNG screenshot). |
+| `mp_run_case` | Connects to simulator, executes steps & assertions (`allowWriteSideEffects` required for write steps) | Runs structured test cases with `caseId`, `acIds`, steps (`tap`, `input`, `call_method`, `set_data`, `relaunch`, `navigate_to`), and per-assertion verdicts (`route_matches`, `page_data_equals`, `wxml_text_contains`, `element_exists`, `not_occluded`, `wx_request_captured`). |
+| `mp_job_status` | Read-only | Queries status or final report of an active/completed `jobId`. |
+| `mp_cancel_job` | Cancels running job | Aborts an active `jobId`, restores `wx.request` hooks, and disconnects cleanly without killing user's WeChat DevTools. |
 
-// 3. Assert dropdown is not occluded by fixed headers/footers
-await assertMpNotOccluded(miniProgram, '.dropdown-menu', '.fixed-header, .fixed-footer');
+### Connection Modes (`connectionMode`)
+- **`connect`** (Default): Connects to an already-running WeChat DevTools Automation WebSocket (`wsEndpoint`, e.g. `ws://127.0.0.1:9420`). Never closes the user's DevTools window on exit.
+- **`launch`**: Launches/attaches via WeChat DevTools CLI (`cliPath`) and `projectPath`.
+- **`fixture`**: Runs against the deterministic built-in Mini Program runtime simulator (`fixtures/sample-mp`) for CI and MCP protocol self-verification.
 
-// 4. Trigger Page method directly without slow UI clicking
-await triggerMpComponentMethod(page, 'onConfirmSubmit', { id: 1001 });
-
-// 5. Save simulator screenshot
-await captureMpScreenshot(miniProgram, './verified.png');
-```
+### Authentication & Privacy (`authRef`)
+- Supports `storage_seed` (injecting storage keys via `wx.setStorageSync` + `reLaunch`), `password_login` (automated input/tap on login page), or `reuse_session` (verifying existing session and auto-falling back when redirected to login or receiving HTTP `401`).
+- Credentials are passed by **environment variable reference** (`authRef`: e.g. `storageEnvVar`, `accountEnvVar`, `passwordEnvVar`) and are automatically redacted (`***REDACTED***`) from all `stdout` responses, logs, and JSON evidence reports.
+- In-page `wx.request` interception captures real requests triggered by the Mini Program page (`requestId`, `url`, `method`, `statusCode`, redacted `responseBody`) and **guarantees restoration of the original `wx.request`** in a `finally` block.
 
 ---
 
-## 🧪 Built-in Mock Mode & Self-Test (Zero DevTools Dependency)
-
-Don't have WeChat DevTools installed on your CI server or current machine? `fast-mp-inspector` includes a deterministic in-memory Mini Program session simulator (`--mock`) and a full self-test suite:
+## 4. CLI Usage (Preserved for Skill Workflows)
 
 ```bash
-# Run the full automated self-test suite:
-npm test
+# Layer 1 Static Bundle & WXSS Check
+node ./scripts/check-mp-bundle.mjs /path/to/mp-project
 
-# Run the CLI in mock mode to preview the JSON diagnostic report & screenshot output:
-node scripts/inspect-mp.mjs --mock --parent .page-container --target .detail-card --occlude .dropdown-menu --screenshot ./mock.png
+# Layer 2-4 Live Mini Program Inspection + Simulator Screenshot
+node ./scripts/inspect-mp.mjs --connect ws://127.0.0.1:9420 --page /pages/index/index --screenshot ./mp-phone.png --report ./mp-report.json
 ```
 
 ---
 
-## 📄 License
+## 5. Verification & Self-Test
 
-Released under the [MIT License](./LICENSE).
+Run the full verification suite (including CLI self-test, MCP `stdio` initialization, static bundle check with 0-byte `.wxss`, positive case `AC-MP-01`, and negative cases `AC-MP-02`):
+
+```bash
+npm test
+```

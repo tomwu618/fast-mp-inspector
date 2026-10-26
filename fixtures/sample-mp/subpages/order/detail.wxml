@@ -1,0 +1,13 @@
+<view class="page-container">
+  <view class="header-bar">
+    <text class="page-title">{{orderTitle}}</text>
+    <text class="status-badge">{{statusText}}</text>
+  </view>
+  <view class="order-card">
+    <text class="order-id-label">单号：ORD-2026-{{orderId}}</text>
+    <button id="toggle-urgent-btn" bindtap="toggleUrgent">切换加急说明</button>
+    <view wx:if="{{showUrgentReason}}" class="urgent-reason-box">
+      <text class="urgent-reason-text">{{urgentReason}}</text>
+    </view>
+  </view>
+</view>

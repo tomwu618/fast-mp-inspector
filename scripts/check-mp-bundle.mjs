@@ -1,26 +1,35 @@
 #!/usr/bin/env node
 /**
- * Layer 1: Static Mini Program Bundle & Subpackage Integrity Probe (check-mp-bundle.mjs)
+ * Layer 1: Static Mini Program Bundle & Subpackage Integrity Probe (scripts/check-mp-bundle.mjs)
  *
  * Works cross-platform (Windows / macOS / Linux) without WeChat DevTools.
  * Supports Native WeChat Mini Program, uni-app (dist/dev/mp-weixin), and Taro (dist/).
  *
- * Checks:
- * 1. app.json validity & route registration (pages + subPackages/subpackages)
- * 2. Existence and non-zero byte size of .js, .wxml, .wxss, .json for every registered route
- * 3. Main package & individual subpackage size limits (< 2MB per package, < 20MB total)
- *
- * Usage:
- *   node scripts/check-mp-bundle.mjs <mp-build-dir> [--json]
+ * Implements Section 5.8 of MCP Integration Spec v1:
+ * - Configurable package size limits (`maxSinglePackageKB`, `maxTotalPackageKB`) with explicit `ruleSource`
+ * - Distinguishes valid empty `.wxss` stylesheets allowed by generators (`allowEmptyStyles: true` by default)
+ *   from missing/empty `.js` or `.wxml` route files.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 
-const MAX_SINGLE_PKG_BYTES = 2 * 1024 * 1024; // 2MB WeChat limit
-const MAX_TOTAL_PKG_BYTES = 20 * 1024 * 1024; // 20MB total limit
+export const DEFAULT_BUNDLE_LIMITS = {
+  maxSinglePackageKB: 2048,
+  maxTotalPackageKB: 20480,
+  ruleSource: 'WeChat Mini Program Official Specification (2048 KB single package / 20480 KB total subpackages)',
+  platform: 'mp-weixin',
+  allowEmptyStyles: true,
+};
 
-export function checkMpBundle(bundleDir) {
+export function checkMpBundle(bundleDir, customLimits = {}) {
+  const limits = {
+    ...DEFAULT_BUNDLE_LIMITS,
+    ...(customLimits || {}),
+  };
+  const maxSingleBytes = Number(limits.maxSinglePackageKB) * 1024;
+  const maxTotalBytes = Number(limits.maxTotalPackageKB) * 1024;
+
   const rootDir = path.resolve(bundleDir);
   const appJsonPath = path.join(rootDir, 'app.json');
 
@@ -28,6 +37,7 @@ export function checkMpBundle(bundleDir) {
     return {
       ok: false,
       error: `Missing app.json in ${rootDir}. Ensure build finished or point to dist/dev/mp-weixin.`,
+      limitsApplied: limits,
     };
   }
 
@@ -38,6 +48,7 @@ export function checkMpBundle(bundleDir) {
     return {
       ok: false,
       error: `Malformed app.json: ${err.message}`,
+      limitsApplied: limits,
     };
   }
 
@@ -52,8 +63,8 @@ export function checkMpBundle(bundleDir) {
 
   const missingFiles = [];
   const emptyFiles = [];
-  const requiredExts = ['.js', '.wxml'];
-  const optionalExts = ['.wxss', '.json'];
+  const validEmptyStyleFiles = [];
+  const malformedJsonFiles = [];
 
   const allPageRoutes = [
     ...mainPages.map((p) => ({ pkg: 'main', route: p })),
@@ -67,7 +78,8 @@ export function checkMpBundle(bundleDir) {
 
   for (const item of allPageRoutes) {
     const cleanRoute = item.route.replace(/^\/+/, '');
-    for (const ext of requiredExts) {
+    // Required non-empty files for every page: .js and .wxml
+    for (const ext of ['.js', '.wxml']) {
       const filePath = path.join(rootDir, `${cleanRoute}${ext}`);
       if (!fs.existsSync(filePath)) {
         missingFiles.push(`${cleanRoute}${ext}`);
@@ -75,15 +87,33 @@ export function checkMpBundle(bundleDir) {
         emptyFiles.push(`${cleanRoute}${ext}`);
       }
     }
-    for (const ext of optionalExts) {
-      const filePath = path.join(rootDir, `${cleanRoute}${ext}`);
-      if (fs.existsSync(filePath) && fs.statSync(filePath).size === 0) {
-        emptyFiles.push(`${cleanRoute}${ext}`);
+
+    // Optional .wxss: generators (uni-app/Taro) legitimately emit 0-byte .wxss for pages without custom styles
+    const wxssPath = path.join(rootDir, `${cleanRoute}.wxss`);
+    if (fs.existsSync(wxssPath) && fs.statSync(wxssPath).size === 0) {
+      if (limits.allowEmptyStyles) {
+        validEmptyStyleFiles.push(`${cleanRoute}.wxss`);
+      } else {
+        emptyFiles.push(`${cleanRoute}.wxss`);
+      }
+    }
+
+    // Optional .json: if present, must be valid JSON (cannot be 0-byte truncated)
+    const jsonPath = path.join(rootDir, `${cleanRoute}.json`);
+    if (fs.existsSync(jsonPath)) {
+      const size = fs.statSync(jsonPath).size;
+      if (size === 0) {
+        emptyFiles.push(`${cleanRoute}.json`);
+      } else {
+        try {
+          JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+        } catch {
+          malformedJsonFiles.push(`${cleanRoute}.json`);
+        }
       }
     }
   }
 
-  // Calculate directory sizes for main package vs each subpackage
   const subRoots = subPackages.map((s) => path.join(rootDir, s.root));
 
   function getDirBytes(dirPath, excludeDirs = []) {
@@ -112,7 +142,9 @@ export function checkMpBundle(bundleDir) {
       root: '/',
       bytes: mainBytes,
       kb: Number((mainBytes / 1024).toFixed(1)),
-      exceeds2MB: mainBytes > MAX_SINGLE_PKG_BYTES,
+      limitKB: limits.maxSinglePackageKB,
+      exceedsSingleLimit: mainBytes > maxSingleBytes,
+      exceeds2MB: mainBytes > maxSingleBytes,
     },
     ...subPackages.map((s) => {
       const subDir = path.join(rootDir, s.root);
@@ -122,37 +154,48 @@ export function checkMpBundle(bundleDir) {
         root: s.root,
         bytes,
         kb: Number((bytes / 1024).toFixed(1)),
-        exceeds2MB: bytes > MAX_SINGLE_PKG_BYTES,
+        limitKB: limits.maxSinglePackageKB,
+        exceedsSingleLimit: bytes > maxSingleBytes,
+        exceeds2MB: bytes > maxSingleBytes,
       };
     }),
   ];
 
   const totalBytes = packageSizes.reduce((acc, p) => acc + p.bytes, 0);
-  const oversizePackages = packageSizes.filter((p) => p.exceeds2MB);
+  const oversizePackages = packageSizes.filter((p) => p.exceedsSingleLimit);
 
   const ok =
     missingFiles.length === 0 &&
     emptyFiles.length === 0 &&
+    malformedJsonFiles.length === 0 &&
     oversizePackages.length === 0 &&
-    totalBytes <= MAX_TOTAL_PKG_BYTES;
+    totalBytes <= maxTotalBytes;
 
   return {
     ok,
     bundleDir: rootDir,
+    limitsApplied: limits,
+    registeredRoutes: allPageRoutes.map((r) => `/${r.route.replace(/^\/+/, '')}`),
     totalRoutesChecked: allPageRoutes.length,
     mainPageCount: mainPages.length,
     subPackageCount: subPackages.length,
     totalBundleKB: Number((totalBytes / 1024).toFixed(1)),
-    exceeds20MBTotal: totalBytes > MAX_TOTAL_PKG_BYTES,
+    exceedsTotalLimit: totalBytes > maxTotalBytes,
+    exceeds20MBTotal: totalBytes > maxTotalBytes,
     packageSizes,
     missingFiles,
     emptyFiles,
+    validEmptyStyleFiles,
+    malformedJsonFiles,
     oversizePackages,
   };
 }
 
 // CLI entry point
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))) {
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))
+) {
   const targetDir = process.argv[2] || '.';
   const asJson = process.argv.includes('--json');
   const report = checkMpBundle(targetDir);
@@ -165,10 +208,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
       console.error(`[FAIL] ${report.error}`);
       process.exit(1);
     }
+    console.log(`Rule source    : ${report.limitsApplied.ruleSource}`);
     console.log(`Routes checked : ${report.totalRoutesChecked} (${report.mainPageCount} main, ${report.subPackageCount} subpackages)`);
-    console.log(`Total size     : ${report.totalBundleKB} KB (Limit: 20,480 KB)`);
+    console.log(`Total size     : ${report.totalBundleKB} KB (Limit: ${report.limitsApplied.maxTotalPackageKB} KB)`);
     for (const pkg of report.packageSizes) {
-      const status = pkg.exceeds2MB ? '[OVER 2MB LIMIT!]' : '[OK]';
+      const status = pkg.exceedsSingleLimit ? `[OVER ${pkg.limitKB}KB LIMIT!]` : '[OK]';
       console.log(`  - ${pkg.name.padEnd(28)}: ${String(pkg.kb).padStart(8)} KB ${status}`);
     }
     if (report.missingFiles.length > 0) {

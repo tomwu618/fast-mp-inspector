@@ -1,0 +1,12 @@
+.page-container {
+  padding: 24rpx;
+}
+.header-bar {
+  display: flex;
+  justify-content: space-between;
+}
+.urgent-reason-box {
+  margin-top: 16rpx;
+  padding: 16rpx;
+  background: #eff6ff;
+}
